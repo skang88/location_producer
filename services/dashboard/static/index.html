@@ -73,10 +73,15 @@
             <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
             <span id="trackingModeBadge" class="text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800">전체 자동포괄</span>
           </div>
-          <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
-            <input type="checkbox" id="autoPanToggle" checked class="rounded bg-gray-800 text-blue-600 focus:ring-0">
-            <span>자동 트래킹</span>
-          </label>
+          <div class="flex items-center gap-2">
+            <button onclick="clearAllTrajectories()" class="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[10px] font-medium transition" title="모든 대원의 지도 궤적선을 초기화">
+              🧹 전체궤적삭제
+            </button>
+            <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+              <input type="checkbox" id="autoPanToggle" checked class="rounded bg-gray-800 text-blue-600 focus:ring-0">
+              <span>자동트래킹</span>
+            </label>
+          </div>
         </div>
         <div id="rescuerList" class="flex-1 overflow-y-auto space-y-3 pr-1">
           <div class="text-xs text-gray-500 text-center py-10">
@@ -133,8 +138,8 @@
               <option value="3">3F (+6.4m)</option>
               <option value="4">4F (+9.6m)</option>
             </select>
-            <button onclick="finishCalibrationMode()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold transition shadow-md shadow-emerald-700/40">✓ 완료</button>
-            <button onclick="cancelCalibrationMode()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded border border-gray-700 transition">취소 (ESC)</button>
+            <button onclick="finishCalibrationMode()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold transition shadow-md shadow-emerald-700/40">✓ 보정 적용</button>
+            <button onclick="cancelCalibrationMode()" class="bg-rose-900/90 hover:bg-rose-800 text-rose-200 border border-rose-600 px-2.5 py-1 rounded font-bold transition flex items-center gap-1">❌ 보정 취소 (ESC)</button>
           </div>
         </div>
 
@@ -293,10 +298,62 @@
       }
     });
 
+    // Rescuer Distinct High-Contrast Palettes (Auto-assigned by Rescuer ID/Name)
+    const RESCUER_PALETTES = [
+      { stroke: '#06b6d4', fill: '#0891b2', glow: '#22d3ee', text: '#22d3ee', threeHex: 0x06b6d4, name: '시안' },
+      { stroke: '#f59e0b', fill: '#d97706', glow: '#fbbf24', text: '#fbbf24', threeHex: 0xf59e0b, name: '호박' },
+      { stroke: '#10b981', fill: '#059669', glow: '#34d399', text: '#34d399', threeHex: 0x10b981, name: '에메랄드' },
+      { stroke: '#a855f7', fill: '#9333ea', glow: '#c084fc', text: '#c084fc', threeHex: 0xa855f7, name: '보라' },
+      { stroke: '#f43f5e', fill: '#e11d48', glow: '#fb7185', text: '#fb7185', threeHex: 0xf43f5e, name: '로즈' },
+      { stroke: '#0284c7', fill: '#0369a1', glow: '#38bdf8', text: '#38bdf8', threeHex: 0x0284c7, name: '스카이블루' },
+      { stroke: '#ea580c', fill: '#c2410c', glow: '#fb923c', text: '#fb923c', threeHex: 0xea580c, name: '오렌지' },
+      { stroke: '#84cc16', fill: '#65a30d', glow: '#a3e635', text: '#a3e635', threeHex: 0x84cc16, name: '라임' }
+    ];
+
+    function getRescuerPalette(id) {
+      if (!id) return RESCUER_PALETTES[0];
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) {
+        hash = (hash * 31 + id.charCodeAt(i)) & 0xffffffff;
+      }
+      const idx = Math.abs(hash) % RESCUER_PALETTES.length;
+      return RESCUER_PALETTES[idx];
+    }
+
     const rescuers = {};
     const polylines = {};
     const markers = {};
     const anchorMarkers = {};
+
+    // Clear Trajectories without deleting rescuers
+    function clearRescuerTrajectory(id) {
+      if (!id) return;
+      if (polylines[id]) {
+        polylines[id].setLatLngs([]);
+      }
+      if (rescuer3DObjects[id]) {
+        rescuer3DObjects[id].points = [];
+        if (rescuer3DObjects[id].line && rescuer3DObjects[id].line.geometry) {
+          rescuer3DObjects[id].line.geometry.setFromPoints([]);
+        }
+      }
+      showToast(`🧹 [${id}] 대원의 이동 궤적선이 초기화되었습니다.`);
+    }
+
+    function clearAllTrajectories() {
+      Object.keys(polylines).forEach(id => {
+        if (polylines[id]) polylines[id].setLatLngs([]);
+      });
+      Object.keys(rescuer3DObjects).forEach(id => {
+        if (rescuer3DObjects[id]) {
+          rescuer3DObjects[id].points = [];
+          if (rescuer3DObjects[id].line && rescuer3DObjects[id].line.geometry) {
+            rescuer3DObjects[id].line.geometry.setFromPoints([]);
+          }
+        }
+      });
+      showToast(`🧹 모든 대원의 이동 궤적선이 초기화되었습니다.`);
+    }
 
     // Multi-Rescuer Tracking Management
     let selectedRescuerId = null; // null = entire bounds mode, or specific device_id
@@ -573,9 +630,9 @@
       const px = data.rel_x || 0.0;
       const py = data.rel_z || 0.0;
       const pz = -(data.rel_y || 0.0);
-      const isRescuer2 = id.includes('02') || id.includes('2');
-      const baseColor = isRescuer2 ? 0x0284c7 : 0xef4444;
-      const emitColor = isRescuer2 ? 0x0ea5e9 : 0xdc2626;
+      const pal = getRescuerPalette(id);
+      const baseColor = pal.threeHex;
+      const emitColor = pal.threeHex;
 
       if (!rescuer3DObjects[id]) {
         const group = new THREE.Group();
@@ -592,14 +649,14 @@
 
         // Label Tag
         const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
-        const labelSprite = createTextSprite(`${id} [${floorStr}]`, isRescuer2 ? '#38bdf8' : '#f87171');
+        const labelSprite = createTextSprite(`${id} [${floorStr}]`, pal.text);
         labelSprite.position.set(0, 1.8, 0);
         labelSprite.scale.set(5.5, 1.4, 1);
         group.add(labelSprite);
 
         // Direction Cone
         const coneGeo = new THREE.ConeGeometry(0.45, 1.4, 8);
-        const coneMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+        const coneMat = new THREE.MeshBasicMaterial({ color: pal.threeHex });
         const cone = new THREE.Mesh(coneGeo, coneMat);
         cone.rotation.x = Math.PI / 2;
         cone.position.z = -1.2;
@@ -610,7 +667,7 @@
         // 3D Path Line
         const lineGeo = new THREE.BufferGeometry();
         const lineMat = new THREE.LineBasicMaterial({
-          color: isRescuer2 ? 0x38bdf8 : 0xf59e0b,
+          color: pal.threeHex,
           linewidth: 4
         });
         const line = new THREE.Line(lineGeo, lineMat);
@@ -691,31 +748,32 @@
       const heading = data.heading_deg || 0;
       const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
 
-      // 1. 2D Polyline trajectory
+      const pal = getRescuerPalette(id);
+
+      // 1. 2D Polyline trajectory (Individual distinct high-contrast color per rescuer)
       if (!polylines[id]) {
-        // Distinct color per rescuer
-        const color = id.includes('02') || id.includes('2') ? '#38bdf8' : (isIndoor ? '#f59e0b' : '#10b981');
         polylines[id] = L.polyline([], {
-          color: color,
+          color: pal.stroke,
           weight: 5,
-          opacity: 0.9
+          opacity: 0.95
         }).addTo(map);
       }
       polylines[id].addLatLng(latLng);
 
       // 2. 2D Marker
-      const badgeBg = id.includes('02') || id.includes('2') ? '#0284c7' : '#dc2626';
+      const badgeBg = pal.fill;
+      const glowColor = pal.glow;
       if (!markers[id]) {
         const icon = L.divIcon({
           className: '',
           html: `
             <div style="position: relative; width: 34px; height: 34px;" onclick="focusRescuer('${id}')">
-              <div style="position: absolute; left: -10px; top: -10px; width: 54px; height: 54px; border-radius: 50%; border: 3px solid ${badgeBg}; opacity: 0.7; animation: pulsate 1.5s infinite;"></div>
-              <div style="width: 34px; height: 34px; background-color: ${badgeBg}; border: 2.5px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px ${badgeBg}; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
+              <div style="position: absolute; left: -10px; top: -10px; width: 54px; height: 54px; border-radius: 50%; border: 3px solid ${glowColor}; opacity: 0.8; animation: pulsate 1.5s infinite;"></div>
+              <div style="width: 34px; height: 34px; background-color: ${badgeBg}; border: 2.5px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px ${glowColor}; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
                 🚨
               </div>
-              <div id="arrow_${id}" style="position: absolute; top: -14px; left: 11px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 12px solid #38bdf8; transform-origin: 6px 28px; transform: rotate(${heading}deg);"></div>
-              <div id="label_${id}" style="position: absolute; left: 38px; top: 4px; background: rgba(15,23,42,0.95); color: #38bdf8; font-weight: bold; font-size: 11px; padding: 2px 7px; border-radius: 4px; border: 1px solid #38bdf8; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); pointer-events: none;">
+              <div id="arrow_${id}" style="position: absolute; top: -14px; left: 11px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 12px solid ${glowColor}; transform-origin: 6px 28px; transform: rotate(${heading}deg);"></div>
+              <div id="label_${id}" style="position: absolute; left: 38px; top: 4px; background: rgba(15,23,42,0.95); color: ${pal.text}; font-weight: bold; font-size: 11px; padding: 2px 7px; border-radius: 4px; border: 1.5px solid ${pal.stroke}; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); pointer-events: none;">
                 ${id} [${floorStr}]
               </div>
             </div>
@@ -828,24 +886,27 @@
       if (items.length === 0) return;
 
       listContainer.innerHTML = items.map(r => {
+        const pal = getRescuerPalette(r.device_id);
         const isIndoor = r.mode === 'INDOOR_DEAD_RECKONING';
         const isSelected = r.device_id === selectedRescuerId;
-        const floorStr = r.floor_str || (r.floor ? `${r.floor}F` : '1F');
+        const isCalibrating = activeCalibratingRescuerId === r.device_id;
+        const currentFloor = r.floor || 1;
+        const floorStr = r.floor_str || `${currentFloor}F`;
         const relZ = r.rel_z ? (r.rel_z > 0 ? `+${r.rel_z}m` : `${r.rel_z}m`) : '+0.0m';
         const isClimbing = r.vertical_status === 'CLIMBING';
         const isDescending = r.vertical_status === 'DESCENDING';
         const isGridSnapped = r.is_grid_snapped;
         const isTurning = r.turn_state === 'TURNING';
         const isMagneticAnomaly = r.magnetic_anomaly;
-
         const isManualCalibrated = !!r.is_manual_calibrated;
 
         return `
           <div onclick="focusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
+            <!-- Header: Color Dot, Device ID, Floor & Tracking Mode -->
             <div class="flex items-center justify-between">
               <span class="font-bold text-white text-sm flex items-center gap-1.5">
-                <span class="w-2.5 h-2.5 rounded-full ${isIndoor ? 'bg-amber-400' : 'bg-emerald-400'}"></span>
-                ${r.device_id}
+                <span class="w-3 h-3 rounded-full shadow-sm" style="background-color: ${pal.fill}; border: 1.5px solid #ffffff;"></span>
+                <span style="color: ${pal.text}">${r.device_id}</span>
                 ${isSelected ? '<span class="text-[9px] bg-cyan-900 text-cyan-200 px-1 py-0.2 rounded">추적중</span>' : ''}
               </span>
               <div class="flex items-center gap-1">
@@ -860,14 +921,36 @@
             
             ${isManualCalibrated ? `
             <div class="flex items-center justify-between bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1 text-[11px] text-amber-200">
-              <span class="flex items-center gap-1 font-semibold">🔒 수동 위치·층수 고정중</span>
+              <span class="flex items-center gap-1 font-semibold">🔒 위치·층수 고정중</span>
               <button onclick="event.stopPropagation(); resetCalibration('${r.device_id}')" class="px-2 py-0.5 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 rounded text-[10px] font-bold transition flex items-center gap-0.5 shadow">
                 <span>🔄 GPS 자동복귀</span>
               </button>
             </div>
             ` : ''}
 
-            <div class="grid grid-cols-2 gap-2 text-xs text-gray-300 pt-1">
+            <!-- Quick 2D Floor Adjustment (No need to switch to 3D view!) -->
+            <div class="flex items-center justify-between bg-gray-900/90 border border-gray-700/80 rounded px-2.5 py-1 text-xs">
+              <div class="flex items-center gap-1.5 text-gray-300 font-semibold">
+                <span>🏢 층수 빠른변경:</span>
+              </div>
+              <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+                <button onclick="stepChangeFloor('${r.device_id}', -1)" class="w-6 h-5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded flex items-center justify-center font-bold text-xs" title="1개 층 아래로">▼</button>
+                <select onchange="quickChangeFloor('${r.device_id}', this.value)" class="bg-gray-950 border border-amber-500/80 text-amber-300 font-bold rounded px-1.5 py-0.5 text-xs focus:outline-none cursor-pointer">
+                  <option value="-2" ${currentFloor === -2 ? 'selected' : ''}>B2F (-6.4m)</option>
+                  <option value="-1" ${currentFloor === -1 ? 'selected' : ''}>B1F (-3.2m)</option>
+                  <option value="1" ${currentFloor === 1 ? 'selected' : ''}>1F (0.0m)</option>
+                  <option value="2" ${currentFloor === 2 ? 'selected' : ''}>2F (+3.2m)</option>
+                  <option value="3" ${currentFloor === 3 ? 'selected' : ''}>3F (+6.4m)</option>
+                  <option value="4" ${currentFloor === 4 ? 'selected' : ''}>4F (+9.6m)</option>
+                  <option value="5" ${currentFloor === 5 ? 'selected' : ''}>5F (+12.8m)</option>
+                  <option value="6" ${currentFloor === 6 ? 'selected' : ''}>6F (+16.0m)</option>
+                  <option value="7" ${currentFloor === 7 ? 'selected' : ''}>7F (+19.2m)</option>
+                </select>
+                <button onclick="stepChangeFloor('${r.device_id}', 1)" class="w-6 h-5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded flex items-center justify-center font-bold text-xs" title="1개 층 위로">▲</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-xs text-gray-300 pt-0.5">
               <div>
                 <span class="text-gray-400">보행:</span> <span class="font-bold text-white">${r.steps || 0} 걸음</span>
               </div>
@@ -883,7 +966,7 @@
             </div>
 
             <!-- Algorithm Stabilization Tags -->
-            <div class="flex flex-wrap items-center gap-1 pt-1">
+            <div class="flex flex-wrap items-center gap-1 pt-0.5">
               <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-300">
                 ${isTurning ? '🔄 회전' : '⬆️ 직진'}
               </span>
@@ -898,13 +981,16 @@
               </button>
             </div>
 
-            <!-- Commander Actions: Manual Calibration & Delete -->
-            <div class="flex items-center gap-1.5 pt-1">
-              <button onclick="event.stopPropagation(); startCalibrationMode('${r.device_id}')" class="flex-1 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/80 rounded text-[11px] font-medium transition flex items-center justify-center gap-1 shadow-sm" title="지도를 클릭하거나 마커를 드래그하여 즉시 위치 보정">
-                <span>🎯 위치 보정</span>
+            <!-- Commander Actions: Manual Calibration Toggle, Clear Trajectory, Delete -->
+            <div class="grid grid-cols-3 gap-1 pt-1">
+              <button onclick="event.stopPropagation(); toggleCalibrationMode('${r.device_id}')" class="py-1 ${isCalibrating ? 'bg-amber-500 hover:bg-amber-400 text-black font-bold animate-pulse' : 'bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/80'} rounded text-[11px] font-medium transition flex items-center justify-center gap-0.5 shadow-sm" title="${isCalibrating ? '보정 모드 취소/종료' : '지도를 클릭하거나 마커를 드래그하여 즉시 위치 보정'}">
+                <span>${isCalibrating ? '❌ 보정취소' : '🎯 위치보정'}</span>
               </button>
-              <button onclick="event.stopPropagation(); deleteRescuer('${r.device_id}')" class="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded text-[11px] font-medium transition flex items-center gap-1 shadow-sm" title="관제 목록에서 대원 삭제">
-                <span>🗑️ 삭제</span>
+              <button onclick="event.stopPropagation(); clearRescuerTrajectory('${r.device_id}')" class="py-1 bg-gray-900 hover:bg-gray-750 text-gray-300 border border-gray-700 rounded text-[11px] font-medium transition flex items-center justify-center gap-0.5 shadow-sm" title="대원을 삭제하지 않고 지도상의 이동 궤적선만 초기화">
+                <span>🧹 궤적삭제</span>
+              </button>
+              <button onclick="event.stopPropagation(); deleteRescuer('${r.device_id}')" class="py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded text-[11px] font-medium transition flex items-center justify-center gap-0.5 shadow-sm" title="관제 목록에서 대원 삭제">
+                <span>🗑️ 대원삭제</span>
               </button>
             </div>
           </div>
@@ -1117,12 +1203,21 @@
     }
 
     // Interactive Direct Calibration Mode
+    function toggleCalibrationMode(id) {
+      if (activeCalibratingRescuerId === id) {
+        cancelCalibrationMode();
+      } else {
+        startCalibrationMode(id);
+      }
+    }
+
     function startCalibrationMode(id) {
       const r = rescuers[id];
       if (!r) return;
 
       activeCalibratingRescuerId = id;
       switchView('2D');
+      renderRescuerList();
 
       document.getElementById('calibRescuerName').innerText = id;
       document.getElementById('calibToolbarFloor').value = String(r.floor || 1);
@@ -1144,7 +1239,7 @@
       map.off('click', onMapClickForCalibration);
       map.on('click', onMapClickForCalibration);
 
-      showToast(`🎯 [${id}] 보정 모드: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!`);
+      showToast(`🎯 [${id}] 위치보정 활성화: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!`);
     }
 
     function onMapClickForCalibration(e) {
@@ -1159,6 +1254,56 @@
       if (!id || !rescuers[id]) return;
       const r = rescuers[id];
       applyCalibration(id, r.lat, r.lng, parseInt(floorVal, 10));
+    }
+
+    // 2D Instant Floor Adjustment (No 3D view switch needed!)
+    function quickChangeFloor(id, floorVal) {
+      const r = rescuers[id];
+      if (!r) return;
+      const floor = parseInt(floorVal, 10);
+      r.floor = floor;
+      r.floor_str = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
+      r.rel_z = (floor - 1) * 3.2;
+      r.vertical_status = "LEVEL";
+      r.mode = "INDOOR_DEAD_RECKONING";
+      r.is_manual_calibrated = true;
+      renderRescuerList();
+
+      if (markers[id]) {
+        const label = document.getElementById(`label_${id}`);
+        if (label) label.innerText = `${id} [${r.floor_str}]`;
+      }
+      update3DRescuer(r);
+
+      fetch('/api/rescuers/calibrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: id,
+          lat: r.lat,
+          lng: r.lng,
+          floor: floor
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        showToast(`🏢 [${id}] 대원 층수가 ${r.floor_str}로 즉시 보정되었습니다.`);
+      })
+      .catch(err => {
+        console.error(err);
+        showToast(`층수 보정 전송 실패: ${err.message}`, false);
+      });
+    }
+
+    function stepChangeFloor(id, delta) {
+      const r = rescuers[id];
+      if (!r) return;
+      let cur = r.floor || 1;
+      let next = cur + delta;
+      if (next === 0) next = delta > 0 ? 1 : -1;
+      if (next < -2) next = -2;
+      if (next > 10) next = 10;
+      quickChangeFloor(id, next);
     }
 
     function applyCalibration(id, lat, lng, floor) {
@@ -1221,12 +1366,23 @@
       map.getContainer().style.cursor = '';
       map.off('click', onMapClickForCalibration);
       document.getElementById('calibrationBanner').classList.add('hidden');
-      if (id) showToast(`✅ [${id}] 보정 완료되었습니다.`);
+      if (id) showToast(`✅ [${id}] 위치 보정이 적용되었습니다.`);
       activeCalibratingRescuerId = null;
+      renderRescuerList();
     }
 
     function cancelCalibrationMode() {
-      finishCalibrationMode();
+      const id = activeCalibratingRescuerId;
+      if (id && markers[id]) {
+        markers[id].dragging.disable();
+        markers[id].off('dragend');
+      }
+      map.getContainer().style.cursor = '';
+      map.off('click', onMapClickForCalibration);
+      document.getElementById('calibrationBanner').classList.add('hidden');
+      if (id) showToast(`❌ [${id}] 위치 보정 모드가 종료되었습니다.`);
+      activeCalibratingRescuerId = null;
+      renderRescuerList();
     }
 
     function resetCalibration(id) {

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 INPUT_TOPIC = os.getenv("INPUT_TOPIC", "raw-sensor-data")
 OUTPUT_TOPIC = os.getenv("OUTPUT_TOPIC", "rescuer-positions")
+COMMANDS_TOPIC = os.getenv("COMMANDS_TOPIC", "rescuer-commands")
 
 def init_kafka(retries=10, delay=3):
     """Initialize Kafka Consumer and Producer"""
@@ -23,6 +24,7 @@ def init_kafka(retries=10, delay=3):
             logger.info(f"Connecting to Kafka at {KAFKA_BROKER} (Attempt {attempt}/{retries})...")
             consumer = KafkaConsumer(
                 INPUT_TOPIC,
+                COMMANDS_TOPIC,
                 bootstrap_servers=KAFKA_BROKER,
                 group_id="location-processing-group",
                 auto_offset_reset="latest",
@@ -56,6 +58,30 @@ def main():
             data = message.value
             device_id = data.get("device_id", message.key or "UNKNOWN")
             timestamp = data.get("timestamp", time.time() * 1000)
+
+            # Handle Manual Commander Actions (Delete / Calibrate)
+            if message.topic == COMMANDS_TOPIC:
+                action = data.get("action")
+                if action == "DELETE":
+                    if device_id in trackers:
+                        del trackers[device_id]
+                        last_log_time.pop(device_id, None)
+                        logger.info(f"🗑️ Rescuer {device_id} removed from Location Engine.")
+                elif action == "CALIBRATE":
+                    if device_id not in trackers:
+                        trackers[device_id] = RescuerTracker(device_id)
+                    tracker = trackers[device_id]
+                    tracker.calibrate_position(
+                        lat=data.get("lat"),
+                        lng=data.get("lng"),
+                        rel_x=data.get("rel_x"),
+                        rel_y=data.get("rel_y"),
+                        floor=data.get("floor")
+                    )
+                    estimate = tracker.get_current_estimate()
+                    producer.send(OUTPUT_TOPIC, key=device_id, value=estimate)
+                    logger.info(f"🎯 Rescuer {device_id} manually calibrated: Lat={estimate.get('lat')}, Lng={estimate.get('lng')}, Floor={estimate.get('floor_str')}")
+                continue
 
             if device_id not in trackers:
                 logger.info(f"New rescuer device registered: {device_id}")

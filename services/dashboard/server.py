@@ -5,7 +5,7 @@ import threading
 import time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import NoBrokersAvailable
 
 logging.basicConfig(
@@ -17,10 +17,26 @@ logger = logging.getLogger(__name__)
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 POSITIONS_TOPIC = os.getenv("POSITIONS_TOPIC", "rescuer-positions")
 RAW_SENSOR_TOPIC = os.getenv("RAW_SENSOR_TOPIC", "raw-sensor-data")
+COMMANDS_TOPIC = os.getenv("COMMANDS_TOPIC", "rescuer-commands")
 
 latest_rescuers = {}
 sse_clients = set()
 clients_lock = threading.Lock()
+
+producer_instance = None
+def get_producer():
+    global producer_instance
+    if producer_instance is None:
+        try:
+            producer_instance = KafkaProducer(
+                bootstrap_servers=KAFKA_BROKER,
+                key_serializer=lambda k: k.encode("utf-8") if k else None,
+                value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8")
+            )
+            logger.info("Dashboard KafkaProducer initialized successfully.")
+        except Exception as e:
+            logger.error(f"Failed to create dashboard KafkaProducer: {e}")
+    return producer_instance
 
 def broadcast_sse(event_type: str, data: dict):
     """Broadcast event to all connected SSE browser clients"""
@@ -142,6 +158,118 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
 
         return super().do_GET()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        # Handle /api/rescuers/{device_id}
+        if parsed.path.startswith("/api/rescuers/"):
+            device_id = parsed.path.split("/")[-1]
+            if device_id in latest_rescuers:
+                del latest_rescuers[device_id]
+            broadcast_sse("RESCUER_DELETED", {"device_id": device_id})
+
+            p = get_producer()
+            if p:
+                try:
+                    p.send(COMMANDS_TOPIC, key=device_id, value={"action": "DELETE", "device_id": device_id})
+                except Exception as e:
+                    logger.error(f"Error publishing DELETE command: {e}")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "deleted": device_id}).encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        content_len = int(self.headers.get("Content-Length", 0))
+        post_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
+        try:
+            body = json.loads(post_body.decode("utf-8"))
+        except Exception:
+            body = {}
+
+        # 1. Delete Rescuer
+        if parsed.path == "/api/rescuers/delete":
+            device_id = body.get("device_id")
+            if device_id:
+                latest_rescuers.pop(device_id, None)
+                broadcast_sse("RESCUER_DELETED", {"device_id": device_id})
+                p = get_producer()
+                if p:
+                    try:
+                        p.send(COMMANDS_TOPIC, key=device_id, value={"action": "DELETE", "device_id": device_id})
+                    except Exception as e:
+                        logger.error(f"Error publishing DELETE command: {e}")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "deleted": device_id}).encode("utf-8"))
+            return
+
+        # 2. Manual Position Calibration
+        if parsed.path == "/api/rescuers/calibrate":
+            device_id = body.get("device_id")
+            if device_id:
+                if device_id in latest_rescuers:
+                    r = latest_rescuers[device_id]
+                else:
+                    r = {
+                        "device_id": device_id,
+                        "mode": "INDOOR_DEAD_RECKONING",
+                        "steps": 0,
+                        "distance": 0.0,
+                        "rel_x": 0.0,
+                        "rel_y": 0.0,
+                        "rel_z": 0.0
+                    }
+                    latest_rescuers[device_id] = r
+
+                if "lat" in body and "lng" in body:
+                    r["lat"] = float(body["lat"])
+                    r["lng"] = float(body["lng"])
+                if "floor" in body:
+                    f = int(body["floor"])
+                    r["floor"] = f
+                    r["floor_str"] = f"{f}F" if f > 0 else f"B{abs(f)+1}F"
+                    r["rel_z"] = (f - 1) * 3.2
+                if "rel_x" in body:
+                    r["rel_x"] = float(body["rel_x"])
+                if "rel_y" in body:
+                    r["rel_y"] = float(body["rel_y"])
+                r["vertical_status"] = "LEVEL"
+
+                broadcast_sse("POSITION_UPDATE", r)
+
+                p = get_producer()
+                if p:
+                    try:
+                        p.send(COMMANDS_TOPIC, key=device_id, value={"action": "CALIBRATE", **body})
+                    except Exception as e:
+                        logger.error(f"Error publishing CALIBRATE command: {e}")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "calibrated": device_id, "data": latest_rescuers.get(device_id)}).encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
     def do_HEAD(self):
         parsed = urlparse(self.path)

@@ -93,6 +93,38 @@ class RescuerTracker:
         else:
             self.floor_tracker.update_barometer(pressure, timestamp)
 
+    def calibrate_position(
+        self,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        rel_x: Optional[float] = None,
+        rel_y: Optional[float] = None,
+        floor: Optional[int] = None
+    ):
+        """Manually calibrate/re-anchor the rescuer's position and floor level"""
+        if self.anchor_gps is not None and lat is not None and lng is not None:
+            anchor_lat = self.anchor_gps["lat"]
+            anchor_lng = self.anchor_gps["lng"]
+            self.rel_y = (float(lat) - anchor_lat) * 111320.0
+            self.rel_x = (float(lng) - anchor_lng) * (111320.0 * math.cos(math.radians(anchor_lat)))
+        elif rel_x is not None and rel_y is not None:
+            self.rel_x = float(rel_x)
+            self.rel_y = float(rel_y)
+        elif self.anchor_gps is None and lat is not None and lng is not None:
+            self.anchor_gps = {"lat": float(lat), "lng": float(lng), "accuracy": 1.0, "is_valid": True}
+            self.rel_x = 0.0
+            self.rel_y = 0.0
+
+        if floor is not None:
+            f = int(floor)
+            self.floor_tracker.current_floor = f
+            self.floor_tracker.candidate_floor = f
+            self.floor_tracker.sustained_step_count = 0
+            base_z = (f - 1) * self.floor_tracker.floor_height
+            self.floor_tracker.snapped_z_m = base_z
+            self.floor_tracker.filtered_altitude_m = base_z
+            self.floor_tracker.vertical_status = "LEVEL"
+
     def update_imu(self, imu_data: dict, timestamp: float):
         """Process IMU data (Accel, Gyro, Yaw) for PDR/ZUPT, heading stabilization, and floor detection"""
         accel = imu_data.get("accel", {"x": 0.0, "y": 9.8, "z": 0.0})

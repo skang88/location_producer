@@ -107,13 +107,18 @@ class RescuerTracker:
             anchor_lng = self.anchor_gps["lng"]
             self.rel_y = (float(lat) - anchor_lat) * 111320.0
             self.rel_x = (float(lng) - anchor_lng) * (111320.0 * math.cos(math.radians(anchor_lat)))
+            self.last_gps = {"lat": float(lat), "lng": float(lng), "accuracy": 1.0, "is_valid": True}
+            self.mode = "INDOOR_DEAD_RECKONING"
         elif rel_x is not None and rel_y is not None:
             self.rel_x = float(rel_x)
             self.rel_y = float(rel_y)
+            self.mode = "INDOOR_DEAD_RECKONING"
         elif self.anchor_gps is None and lat is not None and lng is not None:
             self.anchor_gps = {"lat": float(lat), "lng": float(lng), "accuracy": 1.0, "is_valid": True}
+            self.last_gps = dict(self.anchor_gps)
             self.rel_x = 0.0
             self.rel_y = 0.0
+            self.mode = "INDOOR_DEAD_RECKONING"
 
         if floor is not None:
             f = int(floor)

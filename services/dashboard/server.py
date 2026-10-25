@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import logging
 import threading
 import time
@@ -239,17 +240,32 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     latest_rescuers[device_id] = r
 
                 if "lat" in body and "lng" in body:
-                    r["lat"] = float(body["lat"])
-                    r["lng"] = float(body["lng"])
+                    new_lat = float(body["lat"])
+                    new_lng = float(body["lng"])
+                    r["lat"] = new_lat
+                    r["lng"] = new_lng
+                    
+                    anchor = r.get("anchor_gps")
+                    if anchor and "lat" in anchor:
+                        r["rel_y"] = round((new_lat - anchor["lat"]) * 111320.0, 2)
+                        r["rel_x"] = round((new_lng - anchor["lng"]) * (111320.0 * math.cos(math.radians(anchor["lat"]))), 2)
+                    else:
+                        r["anchor_gps"] = {"lat": new_lat, "lng": new_lng, "accuracy": 1.0, "is_valid": True}
+                        r["rel_x"] = 0.0
+                        r["rel_y"] = 0.0
+                    body["rel_x"] = r["rel_x"]
+                    body["rel_y"] = r["rel_y"]
+
                 if "floor" in body:
                     f = int(body["floor"])
                     r["floor"] = f
                     r["floor_str"] = f"{f}F" if f > 0 else f"B{abs(f)+1}F"
                     r["rel_z"] = (f - 1) * 3.2
-                if "rel_x" in body:
+                if "rel_x" in body and "lat" not in body:
                     r["rel_x"] = float(body["rel_x"])
-                if "rel_y" in body:
+                if "rel_y" in body and "lng" not in body:
                     r["rel_y"] = float(body["rel_y"])
+                r["mode"] = "INDOOR_DEAD_RECKONING"
                 r["vertical_status"] = "LEVEL"
 
                 broadcast_sse("POSITION_UPDATE", r)

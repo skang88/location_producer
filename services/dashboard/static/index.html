@@ -118,13 +118,24 @@
         <!-- 2D Leaflet View -->
         <div id="map"></div>
 
-        <!-- Manual Calibration Banner -->
-        <div id="calibrationBanner" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-indigo-950/95 border-2 border-indigo-400 text-indigo-100 px-5 py-2.5 rounded-xl shadow-2xl flex items-center gap-4 text-xs font-semibold backdrop-blur animate-pulse">
-          <span class="flex items-center gap-2">
-            <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
-            <span>🎯 <b id="calibRescuerName" class="text-amber-300"></b>의 새 위치를 2D 지도에서 클릭하세요.</span>
-          </span>
-          <button onclick="cancelCalibrationMode()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded border border-gray-600 transition">취소 (ESC)</button>
+        <!-- Interactive Calibration Floating Toolbar -->
+        <div id="calibrationBanner" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-900/95 border-2 border-amber-400 text-white px-5 py-2.5 rounded-xl shadow-2xl flex items-center gap-4 text-xs font-semibold backdrop-blur">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
+            <span>🎯 <b id="calibRescuerName" class="text-amber-300 text-sm"></b>: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!</span>
+          </div>
+          <div class="flex items-center gap-2 border-l border-gray-700 pl-3">
+            <span class="text-gray-400">층수:</span>
+            <select id="calibToolbarFloor" onchange="changeCalibratingFloor(this.value)" class="bg-gray-950 border border-amber-500/80 text-amber-300 font-bold rounded px-2.5 py-1 text-xs focus:outline-none">
+              <option value="-1">B1F (-3.2m)</option>
+              <option value="1" selected>1F (0.0m)</option>
+              <option value="2">2F (+3.2m)</option>
+              <option value="3">3F (+6.4m)</option>
+              <option value="4">4F (+9.6m)</option>
+            </select>
+            <button onclick="finishCalibrationMode()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold transition shadow-md shadow-emerald-700/40">✓ 완료</button>
+            <button onclick="cancelCalibrationMode()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded border border-gray-700 transition">취소 (ESC)</button>
+          </div>
         </div>
 
         <!-- 3D Three.js View -->
@@ -878,7 +889,7 @@
 
             <!-- Commander Actions: Manual Calibration & Delete -->
             <div class="flex items-center gap-1.5 pt-1">
-              <button onclick="event.stopPropagation(); openCalibrationModal('${r.device_id}')" class="flex-1 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/80 rounded text-[11px] font-medium transition flex items-center justify-center gap-1 shadow-sm" title="지도 클릭 또는 좌표로 위치/층수 수동 보정">
+              <button onclick="event.stopPropagation(); startCalibrationMode('${r.device_id}')" class="flex-1 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/80 rounded text-[11px] font-medium transition flex items-center justify-center gap-1 shadow-sm" title="지도를 클릭하거나 마커를 드래그하여 즉시 위치 보정">
                 <span>🎯 위치 보정</span>
               </button>
               <button onclick="event.stopPropagation(); deleteRescuer('${r.device_id}')" class="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded text-[11px] font-medium transition flex items-center gap-1 shadow-sm" title="관제 목록에서 대원 삭제">
@@ -1094,57 +1105,81 @@
       renderRescuerList();
     }
 
-    function openCalibrationModal(id) {
+    // Interactive Direct Calibration Mode
+    function startCalibrationMode(id) {
       const r = rescuers[id];
       if (!r) return;
 
       activeCalibratingRescuerId = id;
-      document.getElementById('calibDeviceIdInput').value = id;
-      document.getElementById('calibLatInput').value = r.lat ? r.lat.toFixed(6) : (map.getCenter().lat).toFixed(6);
-      document.getElementById('calibLngInput').value = r.lng ? r.lng.toFixed(6) : (map.getCenter().lng).toFixed(6);
-      document.getElementById('calibFloorInput').value = String(r.floor || 1);
-      document.getElementById('calibrationModal').classList.remove('hidden');
-    }
-
-    function closeCalibrationModal() {
-      document.getElementById('calibrationModal').classList.add('hidden');
-    }
-
-    function startMapPickCalibration() {
-      closeCalibrationModal();
       switchView('2D');
 
-      const id = activeCalibratingRescuerId;
       document.getElementById('calibRescuerName').innerText = id;
+      document.getElementById('calibToolbarFloor').value = String(r.floor || 1);
       document.getElementById('calibrationBanner').classList.remove('hidden');
       map.getContainer().style.cursor = 'crosshair';
 
-      map.once('click', (e) => {
-        const { lat, lng } = e.latlng;
-        document.getElementById('calibLatInput').value = lat.toFixed(6);
-        document.getElementById('calibLngInput').value = lng.toFixed(6);
-        cancelCalibrationMode();
-        document.getElementById('calibrationModal').classList.remove('hidden');
-      });
-    }
-
-    function cancelCalibrationMode() {
-      document.getElementById('calibrationBanner').classList.add('hidden');
-      map.getContainer().style.cursor = '';
-      map.off('click');
-    }
-
-    function submitCalibration() {
-      const id = document.getElementById('calibDeviceIdInput').value;
-      const lat = parseFloat(document.getElementById('calibLatInput').value);
-      const lng = parseFloat(document.getElementById('calibLngInput').value);
-      const floor = parseInt(document.getElementById('calibFloorInput').value, 10);
-
-      if (isNaN(lat) || isNaN(lng)) {
-        alert("유효한 위도와 경도를 입력해 주세요.");
-        return;
+      // Enable dragging on marker
+      if (markers[id]) {
+        markers[id].dragging.enable();
+        markers[id].off('dragend');
+        markers[id].on('dragend', function () {
+          const pos = markers[id].getLatLng();
+          const floor = parseInt(document.getElementById('calibToolbarFloor').value, 10);
+          applyCalibration(id, pos.lat, pos.lng, floor);
+        });
       }
 
+      // Bind direct map click
+      map.off('click', onMapClickForCalibration);
+      map.on('click', onMapClickForCalibration);
+
+      showToast(`🎯 [${id}] 보정 모드: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!`);
+    }
+
+    function onMapClickForCalibration(e) {
+      if (!activeCalibratingRescuerId) return;
+      const { lat, lng } = e.latlng;
+      const floor = parseInt(document.getElementById('calibToolbarFloor').value, 10);
+      applyCalibration(activeCalibratingRescuerId, lat, lng, floor);
+    }
+
+    function changeCalibratingFloor(floorVal) {
+      const id = activeCalibratingRescuerId;
+      if (!id || !rescuers[id]) return;
+      const r = rescuers[id];
+      applyCalibration(id, r.lat, r.lng, parseInt(floorVal, 10));
+    }
+
+    function applyCalibration(id, lat, lng, floor) {
+      if (!id) return;
+
+      // 1. Instantly move marker on map
+      if (markers[id]) {
+        markers[id].setLatLng([lat, lng]);
+        const floorStr = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
+        const label = document.getElementById(`label_${id}`);
+        if (label) label.innerText = `${id} [${floorStr}]`;
+      }
+
+      // 2. Add to trajectory polyline
+      if (polylines[id]) {
+        polylines[id].addLatLng([lat, lng]);
+      }
+
+      // 3. Update local state
+      if (rescuers[id]) {
+        rescuers[id].lat = lat;
+        rescuers[id].lng = lng;
+        rescuers[id].floor = floor;
+        rescuers[id].floor_str = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
+        rescuers[id].rel_z = (floor - 1) * 3.2;
+        rescuers[id].vertical_status = "LEVEL";
+        rescuers[id].mode = "INDOOR_DEAD_RECKONING";
+        renderRescuerList();
+        update3DRescuer(rescuers[id]);
+      }
+
+      // 4. Send calibration update to server & Kafka
       fetch('/api/rescuers/calibrate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1157,85 +1192,38 @@
       })
       .then(res => res.json())
       .then(data => {
-        closeCalibrationModal();
-        showToast(`🎯 [${id}] 위치 및 ${floor}F 수동 보정 완료!`);
-        if (rescuers[id]) {
-          rescuers[id].lat = lat;
-          rescuers[id].lng = lng;
-          rescuers[id].floor = floor;
-          rescuers[id].floor_str = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
-          rescuers[id].rel_z = (floor - 1) * 3.2;
-          rescuers[id].vertical_status = "LEVEL";
-          handlePositionUpdate(rescuers[id]);
-        }
+        showToast(`🎯 [${id}] 위치 (${lat.toFixed(5)}, ${lng.toFixed(5)} | ${floor}F) 보정 완료!`);
       })
       .catch(err => {
         console.error(err);
-        closeCalibrationModal();
-        showToast(`보정 요청 실패: ${err.message}`, false);
+        showToast(`보정 서버 전송 실패: ${err.message}`, false);
       });
+    }
+
+    function finishCalibrationMode() {
+      const id = activeCalibratingRescuerId;
+      if (id && markers[id]) {
+        markers[id].dragging.disable();
+        markers[id].off('dragend');
+      }
+      map.getContainer().style.cursor = '';
+      map.off('click', onMapClickForCalibration);
+      document.getElementById('calibrationBanner').classList.add('hidden');
+      if (id) showToast(`✅ [${id}] 보정 완료되었습니다.`);
+      activeCalibratingRescuerId = null;
+    }
+
+    function cancelCalibrationMode() {
+      finishCalibrationMode();
     }
 
     // Global Keyboard ESC listener
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         cancelCalibrationMode();
-        closeCalibrationModal();
       }
     });
   </script>
-
-  <!-- Manual Position & Floor Calibration Modal -->
-  <div id="calibrationModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl p-5 w-96 shadow-2xl space-y-4 text-xs">
-      <div class="flex items-center justify-between border-b border-gray-800 pb-2">
-        <h3 class="font-bold text-white text-sm flex items-center gap-1.5">
-          <span>🎯 대원 위치 및 층수 수동 보정</span>
-        </h3>
-        <button onclick="closeCalibrationModal()" class="text-gray-400 hover:text-white text-base">✕</button>
-      </div>
-
-      <div class="space-y-3">
-        <div>
-          <label class="text-gray-400 block mb-1">대상 대원 ID</label>
-          <input type="text" id="calibDeviceIdInput" readonly class="w-full bg-gray-950 border border-gray-800 rounded px-2.5 py-1.5 text-amber-400 font-bold font-mono">
-        </div>
-
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="text-gray-400 block mb-1">위도 (Latitude)</label>
-            <input type="number" step="0.000001" id="calibLatInput" class="w-full bg-gray-950 border border-gray-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-cyan-500 focus:outline-none">
-          </div>
-          <div>
-            <label class="text-gray-400 block mb-1">경도 (Longitude)</label>
-            <input type="number" step="0.000001" id="calibLngInput" class="w-full bg-gray-950 border border-gray-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-cyan-500 focus:outline-none">
-          </div>
-        </div>
-
-        <div>
-          <button type="button" onclick="startMapPickCalibration()" class="w-full py-2 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700 rounded transition font-semibold flex items-center justify-center gap-1.5 shadow-sm">
-            <span>🗺️ 2D 지도에서 직접 클릭하여 새 위치 지정</span>
-          </button>
-        </div>
-
-        <div>
-          <label class="text-gray-400 block mb-1">현재 층수 (Floor) 지정</label>
-          <select id="calibFloorInput" class="w-full bg-gray-950 border border-gray-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500 focus:outline-none">
-            <option value="-1">지하 1층 (B1F, -3.2m)</option>
-            <option value="1">지상 1층 (1F, 0.0m)</option>
-            <option value="2">지상 2층 (2F, +3.2m)</option>
-            <option value="3">지상 3층 (3F, +6.4m)</option>
-            <option value="4">지상 4층 (4F, +9.6m)</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-gray-800">
-        <button onclick="closeCalibrationModal()" class="px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition">취소</button>
-        <button onclick="submitCalibration()" class="px-4 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition shadow-lg shadow-cyan-600/30">보정 적용</button>
-      </div>
-    </div>
-  </div>
 
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>

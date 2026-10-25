@@ -97,7 +97,21 @@ class RescuerTracker:
         """Process IMU data (Accel, Gyro, Yaw) for PDR/ZUPT, heading stabilization, and floor detection"""
         accel = imu_data.get("accel", {"x": 0.0, "y": 9.8, "z": 0.0})
         gyro = imu_data.get("gyro", {"x": 0.0, "y": 0.0, "z": 0.0})
-        raw_yaw = imu_data.get("yaw") # Degrees
+        
+        # Parse yaw angle: from direct 'yaw' or Android ROTATION_VECTOR quaternion
+        raw_yaw = imu_data.get("yaw")
+        if raw_yaw is None:
+            rv = imu_data.get("rotation_vector") or imu_data.get("quaternion")
+            if rv:
+                if isinstance(rv, dict):
+                    qx, qy, qz, qw = rv.get("x", 0.0), rv.get("y", 0.0), rv.get("z", 0.0), rv.get("w", 1.0)
+                elif isinstance(rv, (list, tuple)) and len(rv) >= 4:
+                    qx, qy, qz, qw = rv[0], rv[1], rv[2], rv[3]
+                else:
+                    qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
+                siny_cosp = 2.0 * (qw * qz + qx * qy)
+                cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+                raw_yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp)) % 360.0
 
         # Acceleration magnitude
         ax = accel.get("x", 0.0)

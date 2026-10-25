@@ -15,6 +15,8 @@
   <style>
     body { background-color: #0d1117; color: #c9d1d9; }
     #map, #threeContainer { height: 100%; width: 100%; border-radius: 0.5rem; }
+    .leaflet-container { background: #0f172a !important; }
+    .leaflet-tile { image-rendering: -webkit-optimize-contrast; }
     .sensor-log {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 0.75rem;
@@ -183,18 +185,93 @@
 
   <script>
     // ==========================================
-    // 1. 2D Leaflet Map Initialization
+    // 1. 2D Leaflet Map Initialization with Persistent Disk/Cache Caching
     // ==========================================
     let currentMapCenter = [35.3195, 128.2484];
     const map = L.map('map', {
       zoomControl: true,
-      preferCanvas: true
+      preferCanvas: true,
+      fadeAnimation: true,
+      zoomAnimation: true
     }).setView(currentMapCenter, 18);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // Persistent Local Cache Layer (Browser Cache Storage API)
+    // Ensures once tiles are downloaded, they are permanently cached locally and never show grey blanks
+    const PersistentCachedTileLayer = L.TileLayer.extend({
+      createTile: function (coords, done) {
+        const tile = document.createElement('img');
+        const url = this.getTileUrl(coords);
+        tile.setAttribute('role', 'presentation');
+        tile.crossOrigin = 'anonymous';
+
+        if ('caches' in window) {
+          caches.open('gnfire-map-tiles-v2').then(cache => {
+            cache.match(url).then(cachedResponse => {
+              if (cachedResponse) {
+                cachedResponse.blob().then(blob => {
+                  tile.src = URL.createObjectURL(blob);
+                  done(null, tile);
+                });
+              } else {
+                fetch(url, { mode: 'cors' }).then(res => {
+                  if (res.ok) {
+                    cache.put(url, res.clone());
+                    return res.blob();
+                  }
+                  throw new Error('Tile fetch status: ' + res.status);
+                }).then(blob => {
+                  tile.src = URL.createObjectURL(blob);
+                  done(null, tile);
+                }).catch(() => {
+                  // Fallback: direct image load without CORS cache
+                  tile.src = url;
+                  tile.onload = () => done(null, tile);
+                  tile.onerror = () => {
+                    // Secondary Fallback: CartoDB Voyager mirror if OSM blocked/rate-limited
+                    const s = ['a', 'b', 'c', 'd'][Math.abs(coords.x + coords.y) % 4];
+                    tile.src = `https://${s}.basemaps.cartocdn.com/rastertiles/voyager/${coords.z}/${coords.x}/${coords.y}.png`;
+                    tile.onload = () => done(null, tile);
+                    tile.onerror = (err) => done(err, tile);
+                  };
+                });
+              }
+            }).catch(() => {
+              tile.src = url;
+              tile.onload = () => done(null, tile);
+              tile.onerror = (err) => done(err, tile);
+            });
+          }).catch(() => {
+            tile.src = url;
+            tile.onload = () => done(null, tile);
+            tile.onerror = (err) => done(err, tile);
+          });
+        } else {
+          tile.src = url;
+          tile.onload = () => done(null, tile);
+          tile.onerror = (err) => done(err, tile);
+        }
+
+        return tile;
+      }
+    });
+
+    // Primary Tile Layer with maxNativeZoom: 19 (Stretches zoom 19 tiles up to zoom 21, preventing 404 grey blanks)
+    const baseMapLayer = new PersistentCachedTileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 21,
-      attribution: '© OpenStreetMap contributors'
+      maxNativeZoom: 19,
+      keepBuffer: 12,
+      updateWhenIdle: false,
+      updateWhenZooming: false,
+      attribution: '© OpenStreetMap contributors | Cached'
     }).addTo(map);
+
+    // Auto-fix map dimensions on resize to prevent grey canvas
+    window.addEventListener('resize', () => {
+      const mapDiv = document.getElementById('map');
+      if (mapDiv && !mapDiv.classList.contains('hidden')) {
+        map.invalidateSize({ animate: false });
+      }
+    });
 
     const rescuers = {};
     const polylines = {};
@@ -442,7 +519,9 @@
         threeDiv.classList.add('hidden');
         tab2D.className = "px-3.5 py-1.5 rounded-md font-semibold bg-gray-800 text-white transition flex items-center gap-1.5";
         tab3D.className = "px-3.5 py-1.5 rounded-md font-semibold text-gray-400 hover:text-white transition flex items-center gap-1.5";
-        setTimeout(() => map.invalidateSize(), 50);
+        setTimeout(() => {
+          map.invalidateSize({ animate: false });
+        }, 60);
       } else {
         mapDiv.classList.add('hidden');
         threeDiv.classList.remove('hidden');

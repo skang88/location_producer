@@ -123,22 +123,25 @@
         <!-- 2D Leaflet View -->
         <div id="map"></div>
 
-        <!-- Interactive Calibration Floating Toolbar -->
+        <!-- Interactive Calibration Floating Toolbar (No dropdown! Direct Buttons) -->
         <div id="calibrationBanner" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-900/95 border-2 border-amber-400 text-white px-5 py-2.5 rounded-xl shadow-2xl flex items-center gap-4 text-xs font-semibold backdrop-blur">
           <div class="flex items-center gap-2">
             <span class="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
             <span>🎯 <b id="calibRescuerName" class="text-amber-300 text-sm"></b>: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!</span>
           </div>
-          <div class="flex items-center gap-2 border-l border-gray-700 pl-3">
+          <div class="flex items-center gap-1.5 border-l border-gray-700 pl-3">
             <span class="text-gray-400">층수:</span>
-            <select id="calibToolbarFloor" onchange="changeCalibratingFloor(this.value)" class="bg-gray-950 border border-amber-500/80 text-amber-300 font-bold rounded px-2.5 py-1 text-xs focus:outline-none">
-              <option value="-1">B1F (-3.2m)</option>
-              <option value="1" selected>1F (0.0m)</option>
-              <option value="2">2F (+3.2m)</option>
-              <option value="3">3F (+6.4m)</option>
-              <option value="4">4F (+9.6m)</option>
-            </select>
-            <button onclick="finishCalibrationMode()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold transition shadow-md shadow-emerald-700/40">✓ 보정 적용</button>
+            <button onclick="stepToolbarFloor(-1)" class="w-6 h-6 bg-gray-800 hover:bg-gray-700 text-white rounded border border-gray-600 font-bold text-xs flex items-center justify-center">▼</button>
+            <span id="calibToolbarFloorBadge" data-floor="1" class="px-2 py-0.5 bg-amber-950 border border-amber-500 text-amber-300 font-bold rounded text-xs min-w-[32px] text-center">1F</span>
+            <button onclick="stepToolbarFloor(1)" class="w-6 h-6 bg-gray-800 hover:bg-gray-700 text-white rounded border border-gray-600 font-bold text-xs flex items-center justify-center">▲</button>
+            <div class="flex items-center gap-1 ml-1">
+              <button onclick="setToolbarFloor(-1)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">B1</button>
+              <button onclick="setToolbarFloor(1)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">1F</button>
+              <button onclick="setToolbarFloor(2)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">2F</button>
+              <button onclick="setToolbarFloor(3)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">3F</button>
+              <button onclick="setToolbarFloor(4)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">4F</button>
+            </div>
+            <button onclick="finishCalibrationMode()" class="ml-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold transition shadow-md shadow-emerald-700/40">✓ 보정 적용</button>
             <button onclick="cancelCalibrationMode()" class="bg-rose-900/90 hover:bg-rose-800 text-rose-200 border border-rose-600 px-2.5 py-1 rounded font-bold transition flex items-center gap-1">❌ 보정 취소 (ESC)</button>
           </div>
         </div>
@@ -450,6 +453,37 @@
       return sprite;
     }
 
+    function updateTextSprite(sprite, text, color = '#38bdf8', bg = 'rgba(15, 23, 42, 0.9)') {
+      if (!sprite || !sprite.material) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = bg;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(0, 0, 256, 64, 8);
+        ctx.fill();
+      } else {
+        ctx.fillRect(0, 0, 256, 64);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, 252, 60);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 128, 32);
+
+      if (sprite.material.map) {
+        sprite.material.map.dispose();
+      }
+      sprite.material.map = new THREE.CanvasTexture(canvas);
+      sprite.material.needsUpdate = true;
+    }
+
     function init3DScene() {
       if (threeInitialized) return;
       if (typeof THREE === 'undefined') {
@@ -687,6 +721,14 @@
       
       const headingRad = THREE.MathUtils.degToRad(data.heading_deg || 0);
       obj.marker.rotation.y = -headingRad;
+
+      // Update 3D Floor Label dynamically when floor changes
+      const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
+      const labelText = `${id} [${floorStr}]`;
+      if (obj.currentText !== labelText) {
+        obj.currentText = labelText;
+        updateTextSprite(obj.label, labelText, pal.text);
+      }
 
       obj.points.push(new THREE.Vector3(px, py, pz));
       if (obj.points.length > 500) obj.points.shift();
@@ -928,25 +970,30 @@
             </div>
             ` : ''}
 
-            <!-- Quick 2D Floor Adjustment (No need to switch to 3D view!) -->
-            <div class="flex items-center justify-between bg-gray-900/90 border border-gray-700/80 rounded px-2.5 py-1 text-xs">
-              <div class="flex items-center gap-1.5 text-gray-300 font-semibold">
-                <span>🏢 층수 빠른변경:</span>
+            <!-- Quick 2D Floor Adjustment (No dropdown! Direct Buttons) -->
+            <div class="bg-gray-900/90 border border-gray-700/80 rounded p-2 text-xs space-y-1.5" onclick="event.stopPropagation()">
+              <div class="flex items-center justify-between">
+                <span class="text-gray-300 font-semibold flex items-center gap-1">🏢 층수 빠른 보정:</span>
+                <div class="flex items-center gap-1">
+                  <button onclick="stepChangeFloor('${r.device_id}', -1)" class="px-2 py-0.5 bg-gray-800 hover:bg-gray-750 active:bg-cyan-800 text-gray-200 border border-gray-600 rounded font-bold text-xs shadow flex items-center gap-0.5" title="1개 층 아래로 (하강)">
+                    <span>▼ 하강</span>
+                  </button>
+                  <span class="px-2 py-0.5 bg-cyan-950 border border-cyan-500 text-cyan-300 font-bold rounded text-xs min-w-[34px] text-center shadow">${floorStr}</span>
+                  <button onclick="stepChangeFloor('${r.device_id}', 1)" class="px-2 py-0.5 bg-gray-800 hover:bg-gray-750 active:bg-cyan-800 text-gray-200 border border-gray-600 rounded font-bold text-xs shadow flex items-center gap-0.5" title="1개 층 위로 (승강)">
+                    <span>▲ 승강</span>
+                  </button>
+                </div>
               </div>
-              <div class="flex items-center gap-1" onclick="event.stopPropagation()">
-                <button onclick="stepChangeFloor('${r.device_id}', -1)" class="w-6 h-5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded flex items-center justify-center font-bold text-xs" title="1개 층 아래로">▼</button>
-                <select onchange="quickChangeFloor('${r.device_id}', this.value)" class="bg-gray-950 border border-amber-500/80 text-amber-300 font-bold rounded px-1.5 py-0.5 text-xs focus:outline-none cursor-pointer">
-                  <option value="-2" ${currentFloor === -2 ? 'selected' : ''}>B2F (-6.4m)</option>
-                  <option value="-1" ${currentFloor === -1 ? 'selected' : ''}>B1F (-3.2m)</option>
-                  <option value="1" ${currentFloor === 1 ? 'selected' : ''}>1F (0.0m)</option>
-                  <option value="2" ${currentFloor === 2 ? 'selected' : ''}>2F (+3.2m)</option>
-                  <option value="3" ${currentFloor === 3 ? 'selected' : ''}>3F (+6.4m)</option>
-                  <option value="4" ${currentFloor === 4 ? 'selected' : ''}>4F (+9.6m)</option>
-                  <option value="5" ${currentFloor === 5 ? 'selected' : ''}>5F (+12.8m)</option>
-                  <option value="6" ${currentFloor === 6 ? 'selected' : ''}>6F (+16.0m)</option>
-                  <option value="7" ${currentFloor === 7 ? 'selected' : ''}>7F (+19.2m)</option>
-                </select>
-                <button onclick="stepChangeFloor('${r.device_id}', 1)" class="w-6 h-5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded flex items-center justify-center font-bold text-xs" title="1개 층 위로">▲</button>
+              <div class="flex items-center gap-1">
+                ${[-1, 1, 2, 3, 4].map(f => {
+                  const isCur = currentFloor === f;
+                  const label = f < 0 ? `B${Math.abs(f)}F` : `${f}F`;
+                  return `
+                    <button onclick="quickChangeFloor('${r.device_id}', ${f})" class="flex-1 py-1 rounded text-[11px] font-bold transition border ${isCur ? 'bg-amber-500 text-black border-amber-400 shadow-md ring-1 ring-amber-300' : 'bg-gray-950 hover:bg-gray-800 text-gray-300 border-gray-700'}">
+                      ${label}
+                    </button>
+                  `;
+                }).join('')}
               </div>
             </div>
 
@@ -1219,8 +1266,14 @@
       switchView('2D');
       renderRescuerList();
 
+      const f = r.floor || 1;
+      const fStr = r.floor_str || `${f}F`;
       document.getElementById('calibRescuerName').innerText = id;
-      document.getElementById('calibToolbarFloor').value = String(r.floor || 1);
+      const badge = document.getElementById('calibToolbarFloorBadge');
+      if (badge) {
+        badge.innerText = fStr;
+        badge.dataset.floor = String(f);
+      }
       document.getElementById('calibrationBanner').classList.remove('hidden');
       map.getContainer().style.cursor = 'crosshair';
 
@@ -1230,7 +1283,7 @@
         markers[id].off('dragend');
         markers[id].on('dragend', function () {
           const pos = markers[id].getLatLng();
-          const floor = parseInt(document.getElementById('calibToolbarFloor').value, 10);
+          const floor = getToolbarCurrentFloor();
           applyCalibration(id, pos.lat, pos.lng, floor);
         });
       }
@@ -1242,10 +1295,36 @@
       showToast(`🎯 [${id}] 위치보정 활성화: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!`);
     }
 
+    function getToolbarCurrentFloor() {
+      const badge = document.getElementById('calibToolbarFloorBadge');
+      return badge ? parseInt(badge.dataset.floor || '1', 10) : 1;
+    }
+
+    function setToolbarFloor(f) {
+      const id = activeCalibratingRescuerId;
+      const badge = document.getElementById('calibToolbarFloorBadge');
+      if (badge) {
+        badge.innerText = f > 0 ? `${f}F` : `B${Math.abs(f)}F`;
+        badge.dataset.floor = String(f);
+      }
+      if (id && rescuers[id]) {
+        changeCalibratingFloor(f);
+      }
+    }
+
+    function stepToolbarFloor(delta) {
+      let cur = getToolbarCurrentFloor();
+      let next = cur + delta;
+      if (next === 0) next = delta > 0 ? 1 : -1;
+      if (next < -2) next = -2;
+      if (next > 10) next = 10;
+      setToolbarFloor(next);
+    }
+
     function onMapClickForCalibration(e) {
       if (!activeCalibratingRescuerId) return;
       const { lat, lng } = e.latlng;
-      const floor = parseInt(document.getElementById('calibToolbarFloor').value, 10);
+      const floor = getToolbarCurrentFloor();
       applyCalibration(activeCalibratingRescuerId, lat, lng, floor);
     }
 

@@ -68,12 +68,16 @@ def main():
             if "gps" in data:
                 tracker.update_gps(data["gps"], timestamp)
 
-            # 2. Update IMU
+            # 2. Update Barometer (Altitude & Floor)
+            if "barometer" in data:
+                tracker.update_barometer(data["barometer"], timestamp)
+
+            # 3. Update IMU
             step_info = None
             if "imu" in data:
                 step_info = tracker.update_imu(data["imu"], timestamp)
 
-            # 3. Publish computed estimate periodically or on step
+            # 4. Publish computed estimate periodically or on step
             now = time.time()
             is_step = step_info and step_info.get("step_detected")
             
@@ -88,7 +92,7 @@ def main():
                 log_tag = "👟 STEP!" if is_step else "📍 UPDATE"
                 logger.info(
                     f"{log_tag} [{device_id}] Mode: {estimate['mode']} | "
-                    f"Pos: ({estimate['rel_x']}m, {estimate['rel_y']}m) | "
+                    f"Pos: ({estimate['rel_x']}m, {estimate['rel_y']}m, Z:{estimate.get('rel_z', 0)}m | {estimate.get('floor_str', '1F')}) | "
                     f"GPS: ({estimate['lat']}, {estimate['lng']}) | "
                     f"Steps: {estimate['steps']} ({estimate['distance']}m) | "
                     f"Heading: {estimate.get('heading_deg')}°"

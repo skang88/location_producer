@@ -16,7 +16,14 @@ class RescuerTracker:
         # Local Coordinates relative to anchor GPS (in meters)
         self.rel_x = 0.0 # East (meters)
         self.rel_y = 0.0 # North (meters)
-        self.rel_z = 0.0 # Height/Floor (meters)
+        self.rel_z = 0.0 # Height/Floor altitude (meters)
+        
+        # Barometer & Floor Tracking
+        self.anchor_pressure = None # Reference pressure at entrance (hPa)
+        self.current_pressure = None
+        self.floor_height = 3.2 # Standard floor height in meters
+        self.estimated_floor = 1 # 1 = 1st floor (ground floor)
+        self.vertical_status = "LEVEL" # LEVEL, CLIMBING_STAIRS, DESCENDING_STAIRS
         
         # Heading (radians, 0 = North, pi/2 = East)
         self.current_heading = 0.0
@@ -61,6 +68,46 @@ class RescuerTracker:
             if self.mode == "GPS_OUTDOOR" and self.anchor_gps is not None:
                 self.mode = "INDOOR_DEAD_RECKONING"
             return False
+
+    def update_barometer(self, baro_data: dict, timestamp: float):
+        """Process Barometer data to compute relative altitude and floor level"""
+        pressure = baro_data.get("pressure")
+        if not pressure or pressure <= 0:
+            return
+
+        self.current_pressure = pressure
+
+        # Set reference pressure when entering indoors or on first valid reading
+        if self.anchor_pressure is None or self.mode == "GPS_OUTDOOR":
+            self.anchor_pressure = pressure
+            self.rel_z = 0.0
+            self.estimated_floor = 1
+            return
+
+        # International Standard Atmosphere (ISA) formula to compute altitude difference:
+        # h = 44330 * (1 - (P / P0)^(1/5.255))
+        # rel_z = h(current) - h(anchor)
+        try:
+            h_anchor = 44330.0 * (1.0 - math.pow(self.anchor_pressure / 1013.25, 1.0 / 5.255))
+            h_curr = 44330.0 * (1.0 - math.pow(self.current_pressure / 1013.25, 1.0 / 5.255))
+            dz = h_curr - h_anchor
+            
+            # Simple exponential moving average filter for noise reduction
+            self.rel_z = 0.8 * self.rel_z + 0.2 * dz
+            
+            # Estimate floor level relative to entrance (1F = 0m ~ 3.2m)
+            floor_idx = int(math.floor((self.rel_z + (self.floor_height / 2.0)) / self.floor_height))
+            self.estimated_floor = 1 + floor_idx
+
+            # Vertical movement status (e.g. stairs)
+            if self.rel_z > 1.2:
+                self.vertical_status = "CLIMBING"
+            elif self.rel_z < -1.2:
+                self.vertical_status = "DESCENDING"
+            else:
+                self.vertical_status = "LEVEL"
+        except Exception:
+            pass
 
     def update_imu(self, imu_data: dict, timestamp: float):
         """Process IMU data (Accel, Gyro) for PDR/ZUPT"""
@@ -165,12 +212,18 @@ class RescuerTracker:
         current_lat = anchor_lat + lat_offset
         current_lng = anchor_lng + lng_offset
 
+        floor_str = f"{self.estimated_floor}F" if self.estimated_floor > 0 else f"B{abs(self.estimated_floor)+1}F"
+
         return {
             "device_id": self.device_id,
             "mode": self.mode,
             "anchor_gps": self.anchor_gps,
             "rel_x": round(self.rel_x, 2),
             "rel_y": round(self.rel_y, 2),
+            "rel_z": round(self.rel_z, 2),
+            "floor": self.estimated_floor,
+            "floor_str": floor_str,
+            "vertical_status": self.vertical_status,
             "lat": round(current_lat, 7),
             "lng": round(current_lng, 7),
             "heading_deg": round(math.degrees(self.current_heading), 1),

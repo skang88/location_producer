@@ -65,9 +65,22 @@ def generate_sensor_stream(
             accel_x = 0.5 * math.sin(phase) + random.gauss(0, 0.1)
             accel_y = 0.8 * math.cos(phase) + random.gauss(0, 0.1)
 
-            # Turn North after 15 seconds
-            if t_sec > 15.0:
-                heading_deg = 0.0 # North
+            # Simulate Barometer & Floor (Stairs Climbing Simulation)
+            # Standard pressure at 1F = 1013.25 hPa
+            # Each floor (~3.2m) corresponds to ~0.4 hPa pressure drop
+            current_pressure = 1013.25
+            if t_sec > 10.0 and t_sec <= 22.0:
+                # Climbing stairs from 1F to 3F over 12 seconds
+                progress = (t_sec - 10.0) / 12.0
+                climb_meters = progress * 6.4 # ~2 floors (1F -> 3F)
+                pressure_drop = climb_meters * 0.12 # ~0.12 hPa per meter
+                current_pressure = 1013.25 - pressure_drop
+                # Spiral stairs turn
+                heading_deg = (90.0 + (progress * 360.0)) % 360.0
+            elif t_sec > 22.0:
+                # Arrived at 3F
+                current_pressure = 1013.25 - (6.4 * 0.12) # ~1012.48 hPa
+                heading_deg = 0.0 # Moving North on 3F
 
             payload = {
                 "device_id": device_id,
@@ -84,10 +97,10 @@ def generate_sensor_stream(
                         "y": 0.0,
                         "z": 0.0
                     },
-                    "yaw": heading_deg
+                    "yaw": round(heading_deg, 1)
                 },
                 "barometer": {
-                    "pressure": round(1013.25 + random.gauss(0, 0.05), 2)
+                    "pressure": round(current_pressure + random.gauss(0, 0.02), 2)
                 }
             }
 

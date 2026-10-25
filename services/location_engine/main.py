@@ -90,12 +90,13 @@ def main():
                 producer.send(OUTPUT_TOPIC, key=device_id, value=estimate)
                 
                 log_tag = "👟 STEP!" if is_step else "📍 UPDATE"
+                snap_tag = " [GRID_SNAP]" if estimate.get('is_grid_snapped') else ""
+                v_status = estimate.get('vertical_status', 'LEVEL')
                 logger.info(
                     f"{log_tag} [{device_id}] Mode: {estimate['mode']} | "
-                    f"Pos: ({estimate['rel_x']}m, {estimate['rel_y']}m, Z:{estimate.get('rel_z', 0)}m | {estimate.get('floor_str', '1F')}) | "
-                    f"GPS: ({estimate['lat']}, {estimate['lng']}) | "
-                    f"Steps: {estimate['steps']} ({estimate['distance']}m) | "
-                    f"Heading: {estimate.get('heading_deg')}°"
+                    f"Pos: ({estimate['rel_x']}m, {estimate['rel_y']}m, Z:{estimate.get('rel_z', 0)}m | {estimate.get('floor_str', '1F')} {v_status}) | "
+                    f"Heading: {estimate.get('heading_deg')}° ({estimate.get('turn_state', 'STRAIGHT')}{snap_tag}) | "
+                    f"Steps: {estimate['steps']} ({estimate['distance']}m)"
                 )
 
         except Exception as e:

@@ -732,6 +732,10 @@
         const floorStr = r.floor_str || (r.floor ? `${r.floor}F` : '1F');
         const relZ = r.rel_z ? (r.rel_z > 0 ? `+${r.rel_z}m` : `${r.rel_z}m`) : '+0.0m';
         const isClimbing = r.vertical_status === 'CLIMBING';
+        const isDescending = r.vertical_status === 'DESCENDING';
+        const isGridSnapped = r.is_grid_snapped;
+        const isTurning = r.turn_state === 'TURNING';
+        const isMagneticAnomaly = r.magnetic_anomaly;
 
         return `
           <div onclick="focusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
@@ -742,8 +746,8 @@
                 ${isSelected ? '<span class="text-[9px] bg-cyan-900 text-cyan-200 px-1 py-0.2 rounded">추적중</span>' : ''}
               </span>
               <div class="flex items-center gap-1">
-                <span class="text-xs px-2 py-0.5 rounded font-bold ${isClimbing ? 'bg-amber-500 text-black animate-pulse' : 'bg-cyan-950 text-cyan-300 border border-cyan-800'}">
-                  🏢 ${floorStr}
+                <span class="text-xs px-2 py-0.5 rounded font-bold ${isClimbing || isDescending ? 'bg-amber-500 text-black animate-pulse' : 'bg-cyan-950 text-cyan-300 border border-cyan-800'}">
+                  ${isClimbing ? '🪜 승강 중 ' : (isDescending ? '🪜 하강 중 ' : '🏢 ')}${floorStr}
                 </span>
                 <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold ${isIndoor ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'}">
                   ${isIndoor ? '실내 PDR' : '실외 GPS'}
@@ -764,6 +768,15 @@
               <div>
                 <span class="text-gray-400">상대고도:</span> <span class="font-mono text-emerald-400 font-bold">${relZ}</span>
               </div>
+            </div>
+
+            <!-- Algorithm Stabilization Tags -->
+            <div class="flex flex-wrap items-center gap-1 pt-1">
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-300">
+                ${isTurning ? '🔄 회전' : '⬆️ 직진'}
+              </span>
+              ${isGridSnapped ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 border border-blue-700 text-blue-300">📐 복도축 스냅</span>' : ''}
+              ${isMagneticAnomaly ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-950 border border-red-700 text-red-300 animate-pulse">🧲 자기왜곡 차단</span>' : ''}
             </div>
 
             <div class="pt-2 border-t border-gray-700/60 flex items-center justify-between">
@@ -888,7 +901,9 @@
           lng: startLng + (dx1 / (111320.0 * Math.cos(startLat * Math.PI / 180))),
           heading_deg: Math.round(h1),
           steps: step,
-          distance: Number((step * 0.7).toFixed(2))
+          distance: Number((step * 0.7).toFixed(2)),
+          turn_state: (step > 5 && step <= 20) ? "TURNING" : "STRAIGHT",
+          is_grid_snapped: (step <= 5 || step > 20)
         });
 
         handlePositionUpdate({
@@ -905,7 +920,9 @@
           lng: startLng + (dx2 / (111320.0 * Math.cos(startLat * Math.PI / 180))),
           heading_deg: Math.round(h2),
           steps: step,
-          distance: Number((step * 0.6).toFixed(2))
+          distance: Number((step * 0.6).toFixed(2)),
+          turn_state: (step > 7 && step <= 18) ? "TURNING" : "STRAIGHT",
+          is_grid_snapped: (step <= 7 || step > 18)
         });
 
         if (step >= 28) clearInterval(simInterval);

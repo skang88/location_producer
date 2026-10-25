@@ -1226,11 +1226,11 @@
     }
 
     function deleteRescuer(id) {
-      if (!confirm(`[${id}] 대원을 관제 모니터링 목록에서 삭제하시겠습니까?\n(센서 데이터가 새로 도착하면 다시 등록됩니다)`)) {
+      if (!confirm(`[${id}] 대원을 관제 모니터링 목록에서 삭제하시겠습니까?\n(새로운 센서 데이터가 도착하면 다시 자동 등록됩니다)`)) {
         return;
       }
 
-      fetch(`/api/rescuers/${id}`, { method: 'DELETE' })
+      fetch(`/api/rescuers/${encodeURIComponent(id)}`, { method: 'DELETE' })
         .then(res => res.json())
         .then(data => {
           removeRescuerFromUI(id);

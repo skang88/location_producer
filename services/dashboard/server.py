@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import NoBrokersAvailable
 
@@ -171,9 +171,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         # Handle /api/rescuers/{device_id}
         if parsed.path.startswith("/api/rescuers/"):
-            device_id = parsed.path.split("/")[-1]
-            if device_id in latest_rescuers:
-                del latest_rescuers[device_id]
+            raw_id = parsed.path.split("/")[-1]
+            device_id = unquote(raw_id)
+            latest_rescuers.pop(device_id, None)
+            latest_rescuers.pop(raw_id, None)
+            logger.info(f"🗑️ Deleted rescuer: {device_id} (raw: {raw_id}) from dashboard memory")
+
             broadcast_sse("RESCUER_DELETED", {"device_id": device_id})
 
             p = get_producer()

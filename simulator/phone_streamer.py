@@ -10,7 +10,9 @@ def generate_sensor_stream(
     broker_port=1883,
     device_id="RESCUER_ALPHA",
     duration_sec=30,
-    indoor_start_sec=5
+    indoor_start_sec=5,
+    base_lat=37.4979,
+    base_lng=127.0276
 ):
     print(f"Connecting to MQTT broker at {broker_host}:{broker_port}...")
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"sim_{device_id}")
@@ -18,11 +20,8 @@ def generate_sensor_stream(
     client.loop_start()
 
     topic = f"sensors/{device_id}/data"
-    print(f"Started streaming sensor data for '{device_id}' to topic '{topic}'...")
+    print(f"Started streaming sensor data for '{device_id}' to topic '{topic}' (Base: {base_lat}, {base_lng})...")
 
-    # Anchor GPS (e.g., Gangnam Fire Station)
-    base_lat = 37.4979
-    base_lng = 127.0276
     base_alt = 35.0
 
     hz = 50.0  # 50 Hz (20ms interval)
@@ -109,6 +108,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="RESCUER_ALPHA", help="Rescuer Device ID")
     parser.add_argument("--duration", type=int, default=30, help="Simulation duration in seconds")
     parser.add_argument("--indoor", type=int, default=5, help="Seconds before entering indoors")
+    parser.add_argument("--lat", type=float, default=37.4979, help="Initial latitude (e.g. 35.3223 for Uiryeong)")
+    parser.add_argument("--lng", type=float, default=127.0276, help="Initial longitude (e.g. 128.2616 for Uiryeong)")
     args = parser.parse_args()
 
     generate_sensor_stream(
@@ -116,5 +117,7 @@ if __name__ == "__main__":
         broker_port=args.port,
         device_id=args.device,
         duration_sec=args.duration,
-        indoor_start_sec=args.indoor
+        indoor_start_sec=args.indoor,
+        base_lat=args.lat,
+        base_lng=args.lng
     )

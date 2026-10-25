@@ -16,6 +16,64 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 0.75rem;
     }
+
+    /* Pulse animation for rescuer marker */
+    .pulse-ring {
+      border: 3px solid #ef4444;
+      border-radius: 50%;
+      height: 40px;
+      width: 40px;
+      position: absolute;
+      left: -20px;
+      top: -20px;
+      animation: pulsate 1.8s ease-out infinite;
+      opacity: 0;
+    }
+    @keyframes pulsate {
+      0% { transform: scale(0.3); opacity: 0; }
+      50% { opacity: 0.9; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+    .rescuer-dot {
+      width: 18px;
+      height: 18px;
+      background: #ef4444;
+      border: 2px solid white;
+      border-radius: 50%;
+      position: absolute;
+      left: -9px;
+      top: -9px;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .rescuer-label {
+      position: absolute;
+      left: 14px;
+      top: -12px;
+      background: rgba(13, 17, 23, 0.9);
+      color: #fff;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid #ef4444;
+      white-space: nowrap;
+      pointer-events: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    }
+    .heading-arrow {
+      position: absolute;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 12px solid #38bdf8;
+      top: -16px;
+      left: -5px;
+      transform-origin: 5px 16px;
+    }
   </style>
 </head>
 <body class="h-screen flex flex-col font-sans select-none overflow-hidden">
@@ -29,18 +87,21 @@
         <span class="text-xs font-medium px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800">ZUPT / PDR Engine</span>
       </h1>
     </div>
-    <div class="flex items-center space-x-4 text-xs">
-      <div class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-750">
-        <span class="text-gray-400">MQTT Broker:</span>
-        <span class="text-emerald-400 font-semibold">1883 [Active]</span>
-      </div>
-      <div class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-750">
-        <span class="text-gray-400">Kafka Stream:</span>
-        <span class="text-emerald-400 font-semibold">9092 [KRaft]</span>
-      </div>
+    
+    <!-- Controls & Status -->
+    <div class="flex items-center space-x-3 text-xs">
+      <button onclick="locateBrowser()" class="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 px-3 py-1.5 rounded-lg border border-gray-700 transition">
+        <span>📍 내 위치로 이동</span>
+      </button>
+      <button onclick="runSimulationDemo()" class="flex items-center gap-1.5 bg-blue-900/60 hover:bg-blue-800 text-blue-200 px-3 py-1.5 rounded-lg border border-blue-700 transition">
+        <span>▶ 대원 위치 모의 시뮬레이션</span>
+      </button>
+
+      <div class="h-4 w-px bg-gray-800 mx-1"></div>
+
       <div id="wsStatus" class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-700">
         <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-        <span class="text-gray-300">연결 시도 중...</span>
+        <span class="text-gray-300">스트림 연결 중...</span>
       </div>
     </div>
   </header>
@@ -53,11 +114,15 @@
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col flex-1 overflow-hidden shadow-lg">
         <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-800">
           <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
-          <span class="text-xs text-gray-400">실시간 연산</span>
+          <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" id="autoPanToggle" checked class="rounded bg-gray-800 text-blue-600 focus:ring-0">
+            <span>자동 트래킹</span>
+          </label>
         </div>
         <div id="rescuerList" class="flex-1 overflow-y-auto space-y-3 pr-1">
           <div class="text-xs text-gray-500 text-center py-10">
-            수신 대기 중...<br>안드로이드 앱 또는 시뮬레이터에서 데이터를 전송해주세요.
+            대원 신호 대기 중...<br>
+            스마트폰 앱을 켜거나 상단의 <span class="text-blue-400 font-semibold">[대원 위치 모의 시뮬레이션]</span>을 눌러보세요.
           </div>
         </div>
       </div>
@@ -67,9 +132,9 @@
     <div class="flex-1 flex flex-col bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-lg p-2">
       <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
         <div class="flex items-center space-x-3">
-          <span class="text-sm font-semibold text-gray-200">실시간 대원 궤적 (Map & PDR Tracker)</span>
+          <span class="text-sm font-semibold text-gray-200">실시간 대원 위치 및 이동 궤적</span>
           <span id="indoorBanner" class="hidden text-xs bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded">
-            ⚠️ 실내 진입 (GPS 단절 ➡️ PDR/ZUPT 추정 모드 가동)
+            ⚠️ 실내 진입 감지 (GPS 단절 ➡️ PDR/ZUPT 추정 모드)
           </span>
         </div>
         <div class="text-xs text-gray-400 flex items-center space-x-3">
@@ -89,9 +154,9 @@
         <div class="flex items-center justify-between mb-2 pb-2 border-b border-gray-800">
           <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
-            <h2 class="text-sm font-semibold text-gray-200">안드로이드 센서 수신 피드</h2>
+            <h2 class="text-sm font-semibold text-gray-200">안드로이드 센서 실시간 피드</h2>
           </div>
-          <span class="text-xs text-gray-400">MQTT 50Hz 실시간</span>
+          <span class="text-xs text-gray-400">MQTT 50Hz</span>
         </div>
         
         <!-- Live IMU Summary Bar -->
@@ -106,7 +171,7 @@
           <div class="grid grid-cols-3 gap-1 pt-1 text-[11px] font-mono text-gray-400">
             <div>Yaw: <span id="yawVal" class="text-white">0°</span></div>
             <div>기압: <span id="baroVal" class="text-white">0 hPa</span></div>
-            <div>정지: <span id="statVal" class="text-white">-</span></div>
+            <div>모드: <span id="modeVal" class="text-white">대기</span></div>
           </div>
         </div>
 
@@ -126,8 +191,14 @@
   </div>
 
   <script>
-    // 1. Initialize Map (Gangnam default, auto-centers when device appears)
-    const map = L.map('map').setView([37.4979, 127.0276], 18);
+    // 1. Initialize Map
+    // Default fallback center (South Korea center / Fire Agency)
+    let currentMapCenter = [37.4979, 127.0276];
+    const map = L.map('map', {
+      zoomControl: true,
+      preferCanvas: true
+    }).setView(currentMapCenter, 18);
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 21,
       attribution: '© OpenStreetMap contributors'
@@ -137,6 +208,26 @@
     const polylines = {};
     const markers = {};
     const anchorMarkers = {};
+    let hasCenteredOnRescuer = false;
+
+    // Try browser geolocation on initial load if user allows
+    function locateBrowser() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          map.setView([lat, lng], 18);
+          L.circleMarker([lat, lng], {
+            radius: 8,
+            color: '#3b82f6',
+            fillColor: '#60a5fa',
+            fillOpacity: 0.8
+          }).addTo(map).bindPopup("📍 현재 관제자(브라우저) 위치").openPopup();
+        }, (err) => {
+          console.log("Geolocation error or denied:", err.message);
+        });
+      }
+    }
 
     // 2. Real-time EventSource (SSE) Connection
     let eventSource;
@@ -183,42 +274,84 @@
       if (!data.lat || !data.lng) return;
 
       const latLng = [data.lat, data.lng];
+      const isIndoor = data.mode === 'INDOOR_DEAD_RECKONING';
+      const heading = data.heading_deg || 0;
 
       // Polyline trajectory
       if (!polylines[id]) {
         polylines[id] = L.polyline([], {
-          color: data.mode === 'INDOOR_DEAD_RECKONING' ? '#f59e0b' : '#10b981',
+          color: isIndoor ? '#f59e0b' : '#10b981',
           weight: 4,
           opacity: 0.85
         }).addTo(map);
       }
       polylines[id].addLatLng(latLng);
 
-      // Marker
+      // Create / Update Marker
       if (!markers[id]) {
         const icon = L.divIcon({
-          className: 'custom-rescuer-icon',
-          html: `<div class="bg-red-600 text-white rounded-full p-2 shadow-lg border-2 border-white text-xs font-bold flex items-center justify-center w-7 h-7">🚨</div>`,
-          iconSize: [28, 28]
+          className: 'rescuer-marker-container',
+          html: `
+            <div class="relative">
+              <div class="pulse-ring"></div>
+              <div class="heading-arrow" id="arrow_${id}" style="transform: rotate(${heading}deg);"></div>
+              <div class="rescuer-dot"></div>
+              <div class="rescuer-label">${id}</div>
+            </div>
+          `,
+          iconSize: [20, 20]
         });
         markers[id] = L.marker(latLng, { icon: icon }).addTo(map);
-        map.setView(latLng, 19);
+        markers[id].bindPopup(`
+          <div class="text-xs">
+            <b>🚨 대원 ID: ${id}</b><br>
+            상태: ${isIndoor ? '실내 PDR' : '실외 GPS'}<br>
+            걸음: ${data.steps || 0}보 (${data.distance || 0}m)<br>
+            좌표: ${data.lat.toFixed(6)}, ${data.lng.toFixed(6)}
+          </div>
+        `);
       } else {
         markers[id].setLatLng(latLng);
+        const arrow = document.getElementById(`arrow_${id}`);
+        if (arrow) {
+          arrow.style.transform = `rotate(${heading}deg)`;
+        }
       }
 
       // Indoor Anchor Marker
-      if (data.mode === 'INDOOR_DEAD_RECKONING' && data.anchor_gps && !anchorMarkers[id]) {
+      if (isIndoor && data.anchor_gps && !anchorMarkers[id]) {
         document.getElementById('indoorBanner').classList.remove('hidden');
         const anchorIcon = L.divIcon({
-          html: `<div class="bg-amber-500 text-black rounded-md px-1.5 py-0.5 text-[10px] font-bold border border-black shadow">🚪 실내진입점</div>`,
-          iconSize: [60, 20]
+          html: `<div class="bg-amber-500 text-black rounded px-1.5 py-0.5 text-[10px] font-bold border border-black shadow">🚪 ${id} 진입점</div>`,
+          iconSize: [80, 20]
         });
         anchorMarkers[id] = L.marker([data.anchor_gps.lat, data.anchor_gps.lng], { icon: anchorIcon }).addTo(map);
       }
+
+      // Auto Pan / Zoom to Rescuer
+      const autoPan = document.getElementById('autoPanToggle').checked;
+      if (autoPan) {
+        if (!hasCenteredOnRescuer) {
+          map.setView(latLng, 19, { animate: true });
+          hasCenteredOnRescuer = true;
+        } else {
+          map.panTo(latLng, { animate: true, duration: 0.5 });
+        }
+      }
     }
 
-    // 4. Render Left Card List
+    // 4. Focus Camera on Specific Rescuer
+    function focusRescuer(id) {
+      const r = rescuers[id];
+      if (r && r.lat && r.lng) {
+        map.setView([r.lat, r.lng], 19, { animate: true });
+        if (markers[id]) {
+          markers[id].openPopup();
+        }
+      }
+    }
+
+    // 5. Render Left Card List
     function renderRescuerList() {
       const listContainer = document.getElementById('rescuerList');
       const items = Object.values(rescuers);
@@ -229,7 +362,7 @@
       listContainer.innerHTML = items.map(r => {
         const isIndoor = r.mode === 'INDOOR_DEAD_RECKONING';
         return `
-          <div class="bg-gray-800/90 border ${isIndoor ? 'border-amber-600/60' : 'border-emerald-600/60'} rounded-lg p-3 shadow space-y-2">
+          <div onclick="focusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-800 cursor-pointer transition border ${isIndoor ? 'border-amber-600/60' : 'border-emerald-600/60'} rounded-lg p-3 shadow space-y-2">
             <div class="flex items-center justify-between">
               <span class="font-bold text-white text-sm flex items-center gap-1.5">
                 <span class="w-2 h-2 rounded-full ${isIndoor ? 'bg-amber-400' : 'bg-emerald-400'}"></span>
@@ -254,14 +387,17 @@
                 <span class="text-gray-400">방위각:</span> <span class="font-mono text-amber-300">${r.heading_deg || 0}°</span>
               </div>
             </div>
+            <div class="text-[11px] text-gray-400 flex items-center justify-between pt-1 border-t border-gray-700/60">
+              <span class="truncate">위도: ${r.lat?.toFixed(5) || '-'}, 경도: ${r.lng?.toFixed(5) || '-'}</span>
+              <span class="text-blue-400 hover:underline">위치 보기 ➔</span>
+            </div>
           </div>
         `;
       }).join('');
     }
 
-    // 5. Handle Live Raw Sensor Log Stream
+    // 6. Handle Live Raw Sensor Log Stream
     function handleRawSensorFeed(data) {
-      // Update IMU top widgets
       if (data.imu && data.imu.accel) {
         const { x, y, z } = data.imu.accel;
         const norm = Math.sqrt(x*x + y*y + z*z);
@@ -275,8 +411,10 @@
       if (data.barometer && data.barometer.pressure) {
         document.getElementById('baroVal').innerText = data.barometer.pressure + ' hPa';
       }
+      if (data.gps) {
+        document.getElementById('modeVal').innerText = data.gps.is_valid ? '실외 GPS' : '실내 진입';
+      }
 
-      // Append log entry
       const container = document.getElementById('sensorLogContainer');
       const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString();
       const gpsState = data.gps ? (data.gps.is_valid ? 'GPS_OK' : 'GPS_LOST') : 'NO_GPS';
@@ -298,6 +436,52 @@
 
     function clearLogs() {
       document.getElementById('sensorLogContainer').innerHTML = '<div class="text-gray-600">로그가 초기화되었습니다.</div>';
+    }
+
+    // 7. Simulation trigger from UI
+    function runSimulationDemo() {
+      fetch('/api/simulate', { method: 'POST' })
+        .then(r => r.json())
+        .then(res => {
+          alert("모의 대원 센서 스트리밍이 시작되었습니다! 지도와 대원 카드를 확인하세요.");
+        })
+        .catch(e => {
+          // Fallback direct mock injection for instant feedback
+          mockLiveRescuer();
+        });
+    }
+
+    function mockLiveRescuer() {
+      // If server simulation API is not enabled, inject directly to client
+      let step = 0;
+      let startLat = map.getCenter().lat;
+      let startLng = map.getCenter().lng;
+      let dx = 0, dy = 0;
+
+      const simInterval = setInterval(() => {
+        step++;
+        dx += 0.65;
+        const curLat = startLat + (dy / 111320.0);
+        const curLng = startLng + (dx / (111320.0 * Math.cos(startLat * Math.PI / 180)));
+        const mockData = {
+          device_id: "RESCUER_DEMO",
+          mode: step > 5 ? "INDOOR_DEAD_RECKONING" : "GPS_OUTDOOR",
+          anchor_gps: { lat: startLat, lng: startLng },
+          rel_x: Number(dx.toFixed(2)),
+          rel_y: Number(dy.toFixed(2)),
+          lat: curLat,
+          lng: curLng,
+          heading_deg: 90,
+          steps: step,
+          distance: Number((step * 0.65).toFixed(2)),
+          is_stationary: false
+        };
+        handlePositionUpdate(mockData);
+
+        if (step >= 25) {
+          clearInterval(simInterval);
+        }
+      }, 500);
     }
   </script>
 </body>

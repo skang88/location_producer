@@ -162,7 +162,19 @@ fun MainScreen(
                         OutlinedTextField(
                             value = deviceId,
                             onValueChange = { viewModel.updateDeviceId(it) },
-                            label = { Text("Device ID") },
+                            label = { Text("Producer ID (Rescuer ID)") },
+                            placeholder = { Text("e.g. RESCUER_01 or FIRE_02") },
+                            supportingText = {
+                                if (deviceId.trim().isEmpty()) {
+                                    Text(
+                                        text = "* Required: Please enter a unique ID for this device",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                } else {
+                                    Text("Unique device identifier for MQTT streaming")
+                                }
+                            },
+                            isError = deviceId.trim().isEmpty(),
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !serviceStatus.isRunning,
                             singleLine = true

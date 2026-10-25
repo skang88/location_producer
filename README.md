@@ -1,93 +1,99 @@
-# ai-crew-team5
+# 🚒 대원 위치추적 및 안전 모니터링 시스템 (ZUPT/PDR 스트리밍 파이프라인)
 
+스마트폰 및 IoT 디바이스의 센서(가속도계, 자이로스코프, 지자기, 기압계, GPS) 데이터를 **MQTT + Kafka** 기반으로 실시간 수집하고, **실내 진입(GPS 단절) 시점부터 PDR(Pedestrian Dead Reckoning) 및 ZUPT 보조 알고리즘을 통해 실내 이동 경로를 추정**하는 스트리밍 아키텍처 파이프라인입니다.
 
+---
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## 🏗️ 전체 아키텍처
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.aigov.go.kr/seokgyun/ai-crew-team5.git
-git branch -M main
-git push -uf origin main
+[Android SmartPhone] 
+     │ (MQTT 50Hz Sensor Stream: sensors/{device_id}/data)
+     ▼
+[Eclipse Mosquitto (MQTT Broker)]
+     │
+     ▼
+[MQTT-to-Kafka Bridge (Python)]
+     │ (Topic: raw-sensor-data, Partition Key: device_id)
+     ▼
+[Apache Kafka (KRaft Broker)]
+     │
+     ▼
+[Location Engine (Python Worker)]
+     │  ├─ 1. GPS 실외/실내 전환 판정 (Fade-out / Loss 감지)
+     │  ├─ 2. 마지막 유효 GPS 앵커 고정
+     │  ├─ 3. IMU 기반 걸음 검출 (Peak Detection) & 보폭 추정 (Weinberg Model)
+     │  └─ 4. 상대 변위 (X, Y) 및 실내 추정 위경도 매핑
+     ▼
+[Kafka Topic: rescuer-positions]
+     │
+     ▼
+[Dashboard 관제 센터 (FastAPI + WebSocket + Leaflet Map)] (포트 8080)
+     │
+     ▼
+[웹 브라우저 관제 뷰] 실시간 대원 위치 궤적 & 센서 수신 패킷 모니터링
 ```
 
-## Integrate with your tools
+---
 
-* [Set up project integrations](https://gitlab.aigov.go.kr/seokgyun/ai-crew-team5/-/settings/integrations)
+## 📦 디렉터리 구조
 
-## Collaborate with your team
+```
+ai-crew-team5/
+├── docker-compose.yml                  # 전체 인프라 및 서비스 컨테이너 오케스트레이션
+├── config/
+│   └── mosquitto/
+│       └── mosquitto.conf              # Mosquitto MQTT 설정
+├── services/
+│   ├── mqtt_bridge/                    # MQTT -> Kafka 전달 브리지
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── bridge.py
+│   └── location_engine/                # GPS 감지 및 실내 PDR/ZUPT 위치 추정 엔진
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       ├── main.py
+│       └── algorithms/
+│           └── pdr_tracker.py
+└── simulator/                          # 안드로이드 스마트폰 센서 시뮬레이터
+    ├── requirements.txt
+    └── phone_streamer.py
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+---
 
-## Test and Deploy
+## 🚀 빠른 시작 가이드
 
-Use the built-in continuous integration in GitLab.
+### 1. 컨테이너 인프라 빌드 및 실행
+```bash
+docker compose up -d --build
+```
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+### 2. 관제 뷰 웹 대시보드 및 MQTT 도메인 접속 주소
+* **관제 모니터링 웹 콘솔**:
+  - 서브도메인 접속: `http://dashboard.gnfire.opik.net/` (또는 `https://dashboard.gnfire.opik.net/`)
+  - 메인 도메인 접속: `http://gnfire.opik.net/` (또는 `https://gnfire.opik.net/`)
+* **안드로이드 센서 전송 MQTT over WebSocket 주소**:
+  - 서브도메인 방식: `ws://mqtt.gnfire.opik.net/` (또는 SSL: `wss://mqtt.gnfire.opik.net/`)
+  - 단일 도메인 패스 방식: `ws://gnfire.opik.net/mqtt` (또는 SSL: `wss://gnfire.opik.net/mqtt`)
+* **주요 모니터링 기능**:
+  - 🗺️ **실시간 궤적 지도**: 대원 이동 경로(초록: 실외 GPS, 주황: 실내 PDR 추정선), 진입 앵커 포인트
+  - 👥 **대원 카드 현황**: 보행 걸음 수, 총 이동 거리(m), 상대 변위 좌표 (X, Y), 실시간 방위각(°)
+  - ⚡ **안드로이드 센서 수신 피드**: 폰에서 MQTT로 전송되는 원본 IMU/GPS/기압계 패킷 실시간 스트림
 
-***
+### 3. 컨테이너 상태 및 실시간 로그 확인
+```bash
+# 전체 상태 확인
+docker compose ps
 
-# Editing this README
+# 위치 추정 엔진 실시간 연산 로그 확인
+docker compose logs -f location_engine
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+### 3. 안드로이드 센서 시뮬레이터 실행 (테스트)
+안드로이드 앱 없이도 가상 보행 데이터를 50Hz로 MQTT에 쏴서 연산 엔진을 검증할 수 있습니다.
+```bash
+# 로컬 가상환경 또는 호스트에서
+pip install -r simulator/requirements.txt
+python simulator/phone_streamer.py --device RESCUER_01 --duration 25 --indoor 5
+```

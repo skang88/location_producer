@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>대원 위치추적 및 안전 모니터링 관제 콘솔</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { background-color: #0d1117; color: #c9d1d9; }
+    #map { height: 100%; width: 100%; border-radius: 0.5rem; }
+    .sensor-log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col font-sans select-none overflow-hidden">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+      <h1 class="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+        <span>🚒 대원 실내외 위치추적 관제 센터</span>
+        <span class="text-xs font-medium px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800">ZUPT / PDR Engine</span>
+      </h1>
+    </div>
+    <div class="flex items-center space-x-4 text-xs">
+      <div class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-750">
+        <span class="text-gray-400">MQTT Broker:</span>
+        <span class="text-emerald-400 font-semibold">1883 [Active]</span>
+      </div>
+      <div class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-750">
+        <span class="text-gray-400">Kafka Stream:</span>
+        <span class="text-emerald-400 font-semibold">9092 [KRaft]</span>
+      </div>
+      <div id="wsStatus" class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-700">
+        <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+        <span class="text-gray-300">연결 시도 중...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <div class="flex-1 flex overflow-hidden p-4 gap-4">
+    
+    <!-- Left: Rescuer Cards & Stats -->
+    <div class="w-80 flex flex-col gap-4 shrink-0">
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col flex-1 overflow-hidden shadow-lg">
+        <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-800">
+          <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
+          <span class="text-xs text-gray-400">실시간 연산</span>
+        </div>
+        <div id="rescuerList" class="flex-1 overflow-y-auto space-y-3 pr-1">
+          <div class="text-xs text-gray-500 text-center py-10">
+            수신 대기 중...<br>안드로이드 앱 또는 시뮬레이터에서 데이터를 전송해주세요.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center: Map & Trajectory Visualization -->
+    <div class="flex-1 flex flex-col bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-lg p-2">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+        <div class="flex items-center space-x-3">
+          <span class="text-sm font-semibold text-gray-200">실시간 대원 궤적 (Map & PDR Tracker)</span>
+          <span id="indoorBanner" class="hidden text-xs bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded">
+            ⚠️ 실내 진입 (GPS 단절 ➡️ PDR/ZUPT 추정 모드 가동)
+          </span>
+        </div>
+        <div class="text-xs text-gray-400 flex items-center space-x-3">
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> 실외 GPS</span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span> 실내 PDR</span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span> 진입 앵커</span>
+        </div>
+      </div>
+      <div class="flex-1 relative mt-2">
+        <div id="map"></div>
+      </div>
+    </div>
+
+    <!-- Right: Android Raw Sensor Feed & Inspection -->
+    <div class="w-96 flex flex-col gap-4 shrink-0">
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col flex-1 overflow-hidden shadow-lg">
+        <div class="flex items-center justify-between mb-2 pb-2 border-b border-gray-800">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+            <h2 class="text-sm font-semibold text-gray-200">안드로이드 센서 수신 피드</h2>
+          </div>
+          <span class="text-xs text-gray-400">MQTT 50Hz 실시간</span>
+        </div>
+        
+        <!-- Live IMU Summary Bar -->
+        <div id="imuSummary" class="bg-gray-950 border border-gray-800 rounded-lg p-3 text-xs mb-3 space-y-2">
+          <div class="flex justify-between text-gray-400">
+            <span>가속도 (Norm)</span>
+            <span id="accelNormVal" class="text-cyan-400 font-mono">0.00 m/s²</span>
+          </div>
+          <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
+            <div id="accelNormBar" class="bg-cyan-500 h-full w-0 transition-all duration-75"></div>
+          </div>
+          <div class="grid grid-cols-3 gap-1 pt-1 text-[11px] font-mono text-gray-400">
+            <div>Yaw: <span id="yawVal" class="text-white">0°</span></div>
+            <div>기압: <span id="baroVal" class="text-white">0 hPa</span></div>
+            <div>정지: <span id="statVal" class="text-white">-</span></div>
+          </div>
+        </div>
+
+        <!-- Raw JSON Packet Log -->
+        <div class="flex-1 overflow-hidden flex flex-col">
+          <div class="text-xs text-gray-400 mb-1 flex justify-between">
+            <span>수신 패킷 스트림 (Live Feed)</span>
+            <button onclick="clearLogs()" class="hover:text-white text-[11px]">지우기</button>
+          </div>
+          <div id="sensorLogContainer" class="flex-1 bg-gray-950 border border-gray-850 rounded-lg p-2.5 overflow-y-auto sensor-log text-gray-300 space-y-1.5">
+            <div class="text-gray-600">수신 대기 중...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // 1. Initialize Map (Gangnam default, auto-centers when device appears)
+    const map = L.map('map').setView([37.4979, 127.0276], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 21,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    const rescuers = {};
+    const polylines = {};
+    const markers = {};
+    const anchorMarkers = {};
+
+    // 2. Real-time EventSource (SSE) Connection
+    let eventSource;
+    function connectSSE() {
+      eventSource = new EventSource('/events');
+
+      eventSource.onopen = () => {
+        document.getElementById('wsStatus').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span class="text-emerald-400 font-medium">실시간 스트리밍 중</span>
+        `;
+      };
+
+      eventSource.onerror = () => {
+        document.getElementById('wsStatus').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+          <span class="text-amber-400">연결 대기 중...</span>
+        `;
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'INIT_STATE') {
+            Object.values(msg.data).forEach(handlePositionUpdate);
+          } else if (msg.type === 'POSITION_UPDATE') {
+            handlePositionUpdate(msg.data);
+          } else if (msg.type === 'RAW_SENSOR_FEED') {
+            handleRawSensorFeed(msg.data);
+          }
+        } catch (e) {
+          // ignore non-json heartbeats
+        }
+      };
+    }
+    connectSSE();
+
+    // 3. Handle Position Estimate Update
+    function handlePositionUpdate(data) {
+      const id = data.device_id;
+      rescuers[id] = data;
+      renderRescuerList();
+
+      if (!data.lat || !data.lng) return;
+
+      const latLng = [data.lat, data.lng];
+
+      // Polyline trajectory
+      if (!polylines[id]) {
+        polylines[id] = L.polyline([], {
+          color: data.mode === 'INDOOR_DEAD_RECKONING' ? '#f59e0b' : '#10b981',
+          weight: 4,
+          opacity: 0.85
+        }).addTo(map);
+      }
+      polylines[id].addLatLng(latLng);
+
+      // Marker
+      if (!markers[id]) {
+        const icon = L.divIcon({
+          className: 'custom-rescuer-icon',
+          html: `<div class="bg-red-600 text-white rounded-full p-2 shadow-lg border-2 border-white text-xs font-bold flex items-center justify-center w-7 h-7">🚨</div>`,
+          iconSize: [28, 28]
+        });
+        markers[id] = L.marker(latLng, { icon: icon }).addTo(map);
+        map.setView(latLng, 19);
+      } else {
+        markers[id].setLatLng(latLng);
+      }
+
+      // Indoor Anchor Marker
+      if (data.mode === 'INDOOR_DEAD_RECKONING' && data.anchor_gps && !anchorMarkers[id]) {
+        document.getElementById('indoorBanner').classList.remove('hidden');
+        const anchorIcon = L.divIcon({
+          html: `<div class="bg-amber-500 text-black rounded-md px-1.5 py-0.5 text-[10px] font-bold border border-black shadow">🚪 실내진입점</div>`,
+          iconSize: [60, 20]
+        });
+        anchorMarkers[id] = L.marker([data.anchor_gps.lat, data.anchor_gps.lng], { icon: anchorIcon }).addTo(map);
+      }
+    }
+
+    // 4. Render Left Card List
+    function renderRescuerList() {
+      const listContainer = document.getElementById('rescuerList');
+      const items = Object.values(rescuers);
+      document.getElementById('rescuerCount').innerText = items.length;
+
+      if (items.length === 0) return;
+
+      listContainer.innerHTML = items.map(r => {
+        const isIndoor = r.mode === 'INDOOR_DEAD_RECKONING';
+        return `
+          <div class="bg-gray-800/90 border ${isIndoor ? 'border-amber-600/60' : 'border-emerald-600/60'} rounded-lg p-3 shadow space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-white text-sm flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full ${isIndoor ? 'bg-amber-400' : 'bg-emerald-400'}"></span>
+                ${r.device_id}
+              </span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold ${isIndoor ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'}">
+                ${isIndoor ? '실내 PDR/ZUPT' : '실외 GPS'}
+              </span>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-2 text-xs text-gray-300 pt-1">
+              <div>
+                <span class="text-gray-400">보행:</span> <span class="font-bold text-white">${r.steps || 0} 걸음</span>
+              </div>
+              <div>
+                <span class="text-gray-400">이동거리:</span> <span class="font-bold text-white">${r.distance || 0} m</span>
+              </div>
+              <div>
+                <span class="text-gray-400">상대좌표:</span> <span class="font-mono text-cyan-300">(${r.rel_x}m, ${r.rel_y}m)</span>
+              </div>
+              <div>
+                <span class="text-gray-400">방위각:</span> <span class="font-mono text-amber-300">${r.heading_deg || 0}°</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 5. Handle Live Raw Sensor Log Stream
+    function handleRawSensorFeed(data) {
+      // Update IMU top widgets
+      if (data.imu && data.imu.accel) {
+        const { x, y, z } = data.imu.accel;
+        const norm = Math.sqrt(x*x + y*y + z*z);
+        document.getElementById('accelNormVal').innerText = norm.toFixed(2) + ' m/s²';
+        const percent = Math.min(100, Math.max(0, (norm / 20.0) * 100));
+        document.getElementById('accelNormBar').style.width = percent + '%';
+      }
+      if (data.imu && data.imu.yaw !== undefined) {
+        document.getElementById('yawVal').innerText = data.imu.yaw.toFixed(1) + '°';
+      }
+      if (data.barometer && data.barometer.pressure) {
+        document.getElementById('baroVal').innerText = data.barometer.pressure + ' hPa';
+      }
+
+      // Append log entry
+      const container = document.getElementById('sensorLogContainer');
+      const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+      const gpsState = data.gps ? (data.gps.is_valid ? 'GPS_OK' : 'GPS_LOST') : 'NO_GPS';
+      
+      const logLine = document.createElement('div');
+      logLine.className = 'border-b border-gray-900 pb-1';
+      logLine.innerHTML = `
+        <span class="text-gray-500">[${timeStr}]</span> 
+        <span class="text-cyan-400 font-semibold">${data.device_id}</span> 
+        <span class="${data.gps && data.gps.is_valid ? 'text-emerald-400' : 'text-amber-400'}">[${gpsState}]</span>
+        <div class="text-gray-400 truncate">a: (${data.imu?.accel?.x}, ${data.imu?.accel?.y}, ${data.imu?.accel?.z})</div>
+      `;
+
+      container.prepend(logLine);
+      if (container.children.length > 30) {
+        container.removeChild(container.lastChild);
+      }
+    }
+
+    function clearLogs() {
+      document.getElementById('sensorLogContainer').innerHTML = '<div class="text-gray-600">로그가 초기화되었습니다.</div>';
+    }
+  </script>
+</body>
+</html>

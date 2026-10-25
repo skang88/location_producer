@@ -88,6 +88,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         
+        # 0. Handle /static/ prefix redirection to static directory
+        if parsed.path.startswith("/static/"):
+            self.path = parsed.path[7:]
+            parsed = urlparse(self.path)
+
         # 1. Server-Sent Events stream for real-time updates
         if parsed.path == "/events":
             self.send_response(200)
@@ -140,6 +145,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/static/"):
+            self.path = parsed.path[7:]
+            parsed = urlparse(self.path)
         if parsed.path in ["/", "/index.html"]:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

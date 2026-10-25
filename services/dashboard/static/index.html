@@ -9,9 +9,9 @@
   <!-- Leaflet CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- Three.js & OrbitControls for 3D Building & Stair Tracking -->
-  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Three.js & OrbitControls (Local offline-ready & security compliant) -->
+  <script src="/static/js/three.min.js"></script>
+  <script src="/static/js/OrbitControls.js"></script>
   <style>
     body { background-color: #0d1117; color: #c9d1d9; }
     #map, #threeContainer { height: 100%; width: 100%; border-radius: 0.5rem; }
@@ -266,8 +266,43 @@
     let threeInitialized = false;
     const rescuer3DObjects = {};
 
+    function createTextSprite(text, color = '#38bdf8', bg = 'rgba(15, 23, 42, 0.9)') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = bg;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(0, 0, 256, 64, 8);
+        ctx.fill();
+      } else {
+        ctx.fillRect(0, 0, 256, 64);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, 252, 60);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 128, 32);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.scale.set(6, 1.5, 1);
+      return sprite;
+    }
+
     function init3DScene() {
       if (threeInitialized) return;
+      if (typeof THREE === 'undefined') {
+        console.error("Three.js is not loaded yet.");
+        return;
+      }
+
       const container = document.getElementById('threeContainer');
       const width = container.clientWidth || 800;
       const height = container.clientHeight || 600;
@@ -281,13 +316,17 @@
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
       renderer.setSize(width, height);
-      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
       container.appendChild(renderer.domElement);
 
-      controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.05;
-      controls.target.set(0, 4, 0);
+      if (typeof THREE.OrbitControls !== 'undefined') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(0, 4, 0);
+      } else {
+        console.warn("THREE.OrbitControls not available");
+      }
 
       // Bright Lights
       const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
@@ -307,7 +346,7 @@
 
       // Building Floors (B1F to 4F) - Clear vivid slabs
       const floorElevations = [-3.2, 0.0, 3.2, 6.4, 9.6];
-      const floorNames = ["B1F", "1F (진입층)", "2F", "3F", "4F"];
+      const floorNames = ["B1F (-3.2m)", "1F 지상진입 (0m)", "2F (+3.2m)", "3F (+6.4m)", "4F (+9.6m)"];
 
       floorElevations.forEach((elev, idx) => {
         // Bright Grid
@@ -334,6 +373,12 @@
         line.rotation.x = Math.PI / 2;
         line.position.y = elev;
         scene.add(line);
+
+        // Floor Name floating 3D Tag
+        const tagColor = idx === 1 ? '#10b981' : '#38bdf8';
+        const tag = createTextSprite(floorNames[idx], tagColor);
+        tag.position.set(-17, elev + 0.5, 0);
+        scene.add(tag);
       });
 
       // Staircase Shaft Tower (Center)
@@ -353,7 +398,7 @@
       });
 
       function onResize() {
-        if (!container.clientWidth) return;
+        if (!container.clientWidth || !renderer) return;
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(container.clientWidth, container.clientHeight);
@@ -362,12 +407,12 @@
 
       function animate() {
         requestAnimationFrame(animate);
-        controls.update();
+        if (controls) controls.update();
 
         const time = Date.now() * 0.003;
         Object.values(rescuer3DObjects).forEach(obj => {
           if (obj.marker) {
-            const scale = 1.0 + 0.15 * Math.sin(time);
+            const scale = 1.0 + 0.12 * Math.sin(time);
             obj.marker.scale.set(scale, scale, scale);
           }
         });
@@ -409,12 +454,17 @@
         
         // Force resize update
         setTimeout(() => {
-          if (renderer && threeDiv.clientWidth) {
+          if (renderer && threeDiv.clientWidth && threeDiv.clientHeight) {
             camera.aspect = threeDiv.clientWidth / threeDiv.clientHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(threeDiv.clientWidth, threeDiv.clientHeight);
           }
         }, 60);
+
+        // Immediately update all existing rescuers in 3D
+        if (threeInitialized) {
+          Object.values(rescuers).forEach(r => update3DRescuer(r));
+        }
       }
     }
 
@@ -424,19 +474,29 @@
       const px = data.rel_x || 0.0;
       const py = data.rel_z || 0.0;
       const pz = -(data.rel_y || 0.0);
+      const isRescuer2 = id.includes('02') || id.includes('2');
+      const baseColor = isRescuer2 ? 0x0284c7 : 0xef4444;
+      const emitColor = isRescuer2 ? 0x0ea5e9 : 0xdc2626;
 
       if (!rescuer3DObjects[id]) {
         const group = new THREE.Group();
         
         // Bright glowing Sphere
-        const sphereGeo = new THREE.SphereGeometry(0.8, 16, 16);
+        const sphereGeo = new THREE.SphereGeometry(0.85, 16, 16);
         const sphereMat = new THREE.MeshStandardMaterial({
-          color: 0xef4444,
-          emissive: 0xdc2626,
+          color: baseColor,
+          emissive: emitColor,
           roughness: 0.1
         });
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
         group.add(sphere);
+
+        // Label Tag
+        const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
+        const labelSprite = createTextSprite(`${id} [${floorStr}]`, isRescuer2 ? '#38bdf8' : '#f87171');
+        labelSprite.position.set(0, 1.8, 0);
+        labelSprite.scale.set(5.5, 1.4, 1);
+        group.add(labelSprite);
 
         // Direction Cone
         const coneGeo = new THREE.ConeGeometry(0.45, 1.4, 8);
@@ -451,7 +511,7 @@
         // 3D Path Line
         const lineGeo = new THREE.BufferGeometry();
         const lineMat = new THREE.LineBasicMaterial({
-          color: 0xf59e0b,
+          color: isRescuer2 ? 0x38bdf8 : 0xf59e0b,
           linewidth: 4
         });
         const line = new THREE.Line(lineGeo, lineMat);
@@ -460,6 +520,7 @@
         rescuer3DObjects[id] = {
           marker: group,
           cone: cone,
+          label: labelSprite,
           line: line,
           points: []
         };
@@ -633,22 +694,25 @@
       document.getElementById('trackingModeBadge').innerText = `[${id}] 추적 고정`;
       document.getElementById('trackingModeBadge').className = "text-[10px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded border border-amber-800";
 
-      switchView('2D');
-      map.invalidateSize();
+      const mapDiv = document.getElementById('map');
+      const is2DVisible = !mapDiv.classList.contains('hidden');
 
-      if (r.lat && r.lng) {
-        if (!markers[id]) handlePositionUpdate(r);
-        map.setView([r.lat, r.lng], 18);
-        if (markers[id]) markers[id].openPopup();
-      }
-
-      if (threeInitialized && rescuer3DObjects[id] && controls && camera) {
-        const px = r.rel_x || 0.0;
-        const py = r.rel_z || 0.0;
-        const pz = -(r.rel_y || 0.0);
-        controls.target.set(px, py, pz);
-        camera.position.set(px + 20, py + 15, pz + 25);
-        controls.update();
+      if (is2DVisible) {
+        map.invalidateSize();
+        if (r.lat && r.lng) {
+          if (!markers[id]) handlePositionUpdate(r);
+          map.setView([r.lat, r.lng], 18);
+          if (markers[id]) markers[id].openPopup();
+        }
+      } else {
+        if (threeInitialized && rescuer3DObjects[id] && controls && camera) {
+          const px = r.rel_x || 0.0;
+          const py = r.rel_z || 0.0;
+          const pz = -(r.rel_y || 0.0);
+          controls.target.set(px, py, pz);
+          camera.position.set(px + 18, py + 12, pz + 22);
+          controls.update();
+        }
       }
     }
 

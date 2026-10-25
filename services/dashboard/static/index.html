@@ -71,14 +71,14 @@
         <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-800">
           <div class="flex items-center gap-2">
             <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
-            <span id="trackingModeBadge" class="text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800">전체 자동포괄</span>
+            <span id="trackingModeBadge" onclick="unfocusRescuer()" class="text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800 cursor-pointer hover:border-cyan-500 transition" title="클릭하여 전체 보기 모드로 전환">전체 자동포괄</span>
           </div>
           <div class="flex items-center gap-2">
             <button onclick="clearAllTrajectories()" class="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[10px] font-medium transition" title="모든 대원의 지도 궤적선을 초기화">
               🧹 전체궤적삭제
             </button>
             <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
-              <input type="checkbox" id="autoPanToggle" checked class="rounded bg-gray-800 text-blue-600 focus:ring-0">
+              <input type="checkbox" id="autoPanToggle" class="rounded bg-gray-800 text-blue-600 focus:ring-0">
               <span>자동트래킹</span>
             </label>
           </div>
@@ -809,7 +809,7 @@
         const icon = L.divIcon({
           className: '',
           html: `
-            <div style="position: relative; width: 34px; height: 34px;" onclick="focusRescuer('${id}')">
+            <div style="position: relative; width: 34px; height: 34px;" onclick="toggleFocusRescuer('${id}')">
               <div style="position: absolute; left: -10px; top: -10px; width: 54px; height: 54px; border-radius: 50%; border: 3px solid ${glowColor}; opacity: 0.8; animation: pulsate 1.5s infinite;"></div>
               <div style="width: 34px; height: 34px; background-color: ${badgeBg}; border: 2.5px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px ${glowColor}; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
                 🚨
@@ -885,15 +885,32 @@
     }
 
     // ==========================================
-    // 5. Focus Camera on Specific Rescuer (Click Action)
+    // 5. Focus Camera on Specific Rescuer (Click Action & Toggle)
     // ==========================================
+    function toggleFocusRescuer(id) {
+      if (selectedRescuerId === id) {
+        unfocusRescuer();
+      } else {
+        focusRescuer(id);
+      }
+    }
+
+    function unfocusRescuer() {
+      selectedRescuerId = null;
+      document.getElementById('trackingModeBadge').innerText = "전체 자동포괄";
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800 cursor-pointer hover:border-cyan-500 transition";
+      renderRescuerList();
+      showToast("대원 단독 추적이 해제되었습니다. (자유 탐색 모드)");
+    }
+
     function focusRescuer(id) {
       selectedRescuerId = id;
+      renderRescuerList();
       const r = rescuers[id];
       if (!r) return;
 
-      document.getElementById('trackingModeBadge').innerText = `[${id}] 추적 고정`;
-      document.getElementById('trackingModeBadge').className = "text-[10px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded border border-amber-800";
+      document.getElementById('trackingModeBadge').innerText = `[${id}] 추적 고정 (해제클릭)`;
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded border border-amber-800 cursor-pointer hover:bg-amber-900 transition";
 
       const mapDiv = document.getElementById('map');
       const is2DVisible = !mapDiv.classList.contains('hidden');
@@ -943,13 +960,13 @@
         const isManualCalibrated = !!r.is_manual_calibrated;
 
         return `
-          <div onclick="focusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
+          <div onclick="toggleFocusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
             <!-- Header: Color Dot, Device ID, Floor & Tracking Mode -->
             <div class="flex items-center justify-between">
               <span class="font-bold text-white text-sm flex items-center gap-1.5">
                 <span class="w-3 h-3 rounded-full shadow-sm" style="background-color: ${pal.fill}; border: 1.5px solid #ffffff;"></span>
                 <span style="color: ${pal.text}">${r.device_id}</span>
-                ${isSelected ? '<span class="text-[9px] bg-cyan-900 text-cyan-200 px-1 py-0.2 rounded">추적중</span>' : ''}
+                ${isSelected ? '<span onclick="event.stopPropagation(); unfocusRescuer()" class="text-[9px] bg-amber-500 text-black font-bold px-1.5 py-0.5 rounded cursor-pointer hover:bg-amber-400 shadow" title="클릭하여 추적 해제">추적중 ✕</span>' : ''}
               </span>
               <div class="flex items-center gap-1">
                 <span class="text-xs px-2 py-0.5 rounded font-bold ${isClimbing || isDescending ? 'bg-amber-500 text-black animate-pulse' : 'bg-cyan-950 text-cyan-300 border border-cyan-800'}">
@@ -1023,9 +1040,15 @@
 
             <div class="pt-2 border-t border-gray-700/60 flex items-center justify-between">
               <span class="text-[11px] text-gray-400 truncate">방위: ${r.heading_deg || 0}°</span>
-              <button onclick="event.stopPropagation(); focusRescuer('${r.device_id}')" class="px-2.5 py-1 ${isSelected ? 'bg-amber-600 text-white' : 'bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700'} rounded text-[11px] font-medium transition">
-                <span>${isSelected ? '✓ 추적 중' : '📍 이 대원만 추적'}</span>
-              </button>
+              ${isSelected ? `
+                <button onclick="event.stopPropagation(); unfocusRescuer()" class="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[11px] font-bold transition flex items-center gap-1 shadow" title="클릭하여 단독 추적 해제">
+                  <span>✓ 추적 중 (해제)</span>
+                </button>
+              ` : `
+                <button onclick="event.stopPropagation(); focusRescuer('${r.device_id}')" class="px-2.5 py-1 bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700 rounded text-[11px] font-medium transition">
+                  <span>📍 이 대원만 추적</span>
+                </button>
+              `}
             </div>
 
             <!-- Commander Actions: Manual Calibration Toggle, Clear Trajectory, Delete -->

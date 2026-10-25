@@ -81,6 +81,10 @@ def main():
                     estimate = tracker.get_current_estimate()
                     producer.send(OUTPUT_TOPIC, key=device_id, value=estimate)
                     logger.info(f"🎯 Rescuer {device_id} manually calibrated: Lat={estimate.get('lat')}, Lng={estimate.get('lng')}, Floor={estimate.get('floor_str')}")
+                elif action == "RESET_CALIBRATION":
+                    if device_id in trackers:
+                        trackers[device_id].reset_calibration()
+                        logger.info(f"🔄 Rescuer {device_id} calibration reset to auto GPS")
                 continue
 
             if device_id not in trackers:

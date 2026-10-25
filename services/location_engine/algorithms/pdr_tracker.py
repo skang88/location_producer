@@ -17,6 +17,7 @@ class RescuerTracker:
         
         # Mode: "GPS_OUTDOOR" vs "INDOOR_DEAD_RECKONING"
         self.mode = "GPS_OUTDOOR"
+        self.is_manual_calibrated = False # Commander manual override lock
         
         # Latest GPS
         self.last_gps = None
@@ -56,6 +57,18 @@ class RescuerTracker:
         """Process incoming GPS data"""
         is_valid = gps_data.get("is_valid", False)
         accuracy = gps_data.get("accuracy", 999.0)
+
+        self.last_gps = {
+            "lat": gps_data["lat"],
+            "lng": gps_data["lng"],
+            "alt": gps_data.get("alt", 0.0),
+            "accuracy": accuracy,
+            "timestamp": timestamp
+        }
+
+        # If commander manually calibrated position indoors, NEVER snap back to outdoor GPS!
+        if self.is_manual_calibrated:
+            return False
         
         # GPS validity criteria (valid flag and accuracy <= 15m)
         if is_valid and accuracy <= 15.0:
@@ -65,13 +78,6 @@ class RescuerTracker:
                 self.rel_x = 0.0
                 self.rel_y = 0.0
             
-            self.last_gps = {
-                "lat": gps_data["lat"],
-                "lng": gps_data["lng"],
-                "alt": gps_data.get("alt", 0.0),
-                "accuracy": accuracy,
-                "timestamp": timestamp
-            }
             # Continuously update anchor while outdoors
             self.anchor_gps = dict(self.last_gps)
             return True
@@ -85,6 +91,11 @@ class RescuerTracker:
         """Process Barometer data to compute relative altitude and floor level"""
         pressure = baro_data.get("pressure")
         if not pressure or pressure <= 0:
+            return
+
+        # If manually calibrated, continuously track altitude relative to calibrated floor baseline
+        if self.is_manual_calibrated:
+            self.floor_tracker.update_barometer(pressure, timestamp)
             return
 
         # If transitioning from outdoors, anchor at entrance pressure
@@ -101,34 +112,26 @@ class RescuerTracker:
         rel_y: Optional[float] = None,
         floor: Optional[int] = None
     ):
-        """Manually calibrate/re-anchor the rescuer's position and floor level"""
-        if self.anchor_gps is not None and lat is not None and lng is not None:
-            anchor_lat = self.anchor_gps["lat"]
-            anchor_lng = self.anchor_gps["lng"]
-            self.rel_y = (float(lat) - anchor_lat) * 111320.0
-            self.rel_x = (float(lng) - anchor_lng) * (111320.0 * math.cos(math.radians(anchor_lat)))
-            self.last_gps = {"lat": float(lat), "lng": float(lng), "accuracy": 1.0, "is_valid": True}
-            self.mode = "INDOOR_DEAD_RECKONING"
-        elif rel_x is not None and rel_y is not None:
-            self.rel_x = float(rel_x)
-            self.rel_y = float(rel_y)
-            self.mode = "INDOOR_DEAD_RECKONING"
-        elif self.anchor_gps is None and lat is not None and lng is not None:
-            self.anchor_gps = {"lat": float(lat), "lng": float(lng), "accuracy": 1.0, "is_valid": True}
+        """Manually calibrate/re-anchor the rescuer's position and floor level with manual lock"""
+        self.is_manual_calibrated = True
+        self.mode = "INDOOR_DEAD_RECKONING"
+
+        if lat is not None and lng is not None:
+            # Re-anchor origin to this newly calibrated location so PDR walks from here
+            self.anchor_gps = {"lat": float(lat), "lng": float(lng), "alt": 0.0, "accuracy": 1.0, "is_valid": True}
             self.last_gps = dict(self.anchor_gps)
             self.rel_x = 0.0
             self.rel_y = 0.0
-            self.mode = "INDOOR_DEAD_RECKONING"
+        elif rel_x is not None and rel_y is not None:
+            self.rel_x = float(rel_x)
+            self.rel_y = float(rel_y)
 
         if floor is not None:
-            f = int(floor)
-            self.floor_tracker.current_floor = f
-            self.floor_tracker.candidate_floor = f
-            self.floor_tracker.sustained_step_count = 0
-            base_z = (f - 1) * self.floor_tracker.floor_height
-            self.floor_tracker.snapped_z_m = base_z
-            self.floor_tracker.filtered_altitude_m = base_z
-            self.floor_tracker.vertical_status = "LEVEL"
+            self.floor_tracker.calibrate_floor(int(floor))
+
+    def reset_calibration(self):
+        """Release manual lock and return to automatic GPS detection"""
+        self.is_manual_calibrated = False
 
     def update_imu(self, imu_data: dict, timestamp: float):
         """Process IMU data (Accel, Gyro, Yaw) for PDR/ZUPT, heading stabilization, and floor detection"""
@@ -280,5 +283,6 @@ class RescuerTracker:
             "is_stationary": self.is_stationary,
             "turn_state": heading_info["turn_state"],
             "is_grid_snapped": heading_info["is_grid_snapped"],
-            "magnetic_anomaly": heading_info["magnetic_anomaly_active"]
+            "magnetic_anomaly": heading_info["magnetic_anomaly_active"],
+            "is_manual_calibrated": self.is_manual_calibrated
         }

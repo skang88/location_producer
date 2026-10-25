@@ -54,6 +54,33 @@ class FloorTracker:
         self.sustained_step_count = 0
         self.vertical_status = "LEVEL"
 
+    def calibrate_floor(self, floor: int):
+        """
+        Manually calibrate current floor and re-anchor reference pressure
+        so the current ambient pressure represents this target floor.
+        """
+        f = int(floor)
+        self.current_floor = f
+        self.candidate_floor = f
+        self.sustained_step_count = 0
+        target_z = (f - 1) * self.floor_height
+        self.snapped_z_m = target_z
+        self.filtered_altitude_m = target_z
+        self.raw_altitude_m = target_z
+        self.vertical_status = "LEVEL"
+
+        # Re-anchor reference pressure so that current pressure corresponds to target_z
+        p_now = self.current_pressure or self.anchor_pressure or 1013.25
+        try:
+            # h_curr = 44330 * (1 - (P_now / 1013.25)^(1/5.255))
+            # We want: h_curr - h_anchor = target_z  =>  h_anchor = h_curr - target_z
+            # P_anchor = 1013.25 * (1 - h_anchor / 44330)^5.255
+            h_curr = 44330.0 * (1.0 - math.pow(p_now / 1013.25, 1.0 / 5.255))
+            h_anchor = h_curr - target_z
+            self.anchor_pressure = 1013.25 * math.pow(1.0 - (h_anchor / 44330.0), 5.255)
+        except Exception:
+            pass
+
     def update_barometer(self, pressure_hpa: float, timestamp: Optional[float] = None):
         """Update barometric altitude using ISA formula with air draft noise rejection"""
         if not pressure_hpa or pressure_hpa <= 0:

@@ -245,16 +245,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     r["lat"] = new_lat
                     r["lng"] = new_lng
                     
-                    anchor = r.get("anchor_gps")
-                    if anchor and "lat" in anchor:
-                        r["rel_y"] = round((new_lat - anchor["lat"]) * 111320.0, 2)
-                        r["rel_x"] = round((new_lng - anchor["lng"]) * (111320.0 * math.cos(math.radians(anchor["lat"]))), 2)
-                    else:
-                        r["anchor_gps"] = {"lat": new_lat, "lng": new_lng, "accuracy": 1.0, "is_valid": True}
-                        r["rel_x"] = 0.0
-                        r["rel_y"] = 0.0
-                    body["rel_x"] = r["rel_x"]
-                    body["rel_y"] = r["rel_y"]
+                    # Manual calibration re-anchors to this exact location
+                    r["anchor_gps"] = {"lat": new_lat, "lng": new_lng, "accuracy": 1.0, "is_valid": True}
+                    r["rel_x"] = 0.0
+                    r["rel_y"] = 0.0
+                    body["rel_x"] = 0.0
+                    body["rel_y"] = 0.0
 
                 if "floor" in body:
                     f = int(body["floor"])
@@ -266,6 +262,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 if "rel_y" in body and "lng" not in body:
                     r["rel_y"] = float(body["rel_y"])
                 r["mode"] = "INDOOR_DEAD_RECKONING"
+                r["is_manual_calibrated"] = True
                 r["vertical_status"] = "LEVEL"
 
                 broadcast_sse("POSITION_UPDATE", r)
@@ -282,6 +279,24 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "calibrated": device_id, "data": latest_rescuers.get(device_id)}).encode("utf-8"))
+            return
+
+        # 3. Reset Calibration (Return to GPS Auto Tracking)
+        if parsed.path == "/api/rescuers/reset_calibration":
+            device_id = body.get("device_id")
+            if device_id and device_id in latest_rescuers:
+                latest_rescuers[device_id]["is_manual_calibrated"] = False
+            p = get_producer()
+            if p and device_id:
+                try:
+                    p.send(COMMANDS_TOPIC, key=device_id, value={"action": "RESET_CALIBRATION", "device_id": device_id})
+                except Exception as e:
+                    logger.error(f"Error publishing RESET_CALIBRATION command: {e}")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "reset": device_id}).encode("utf-8"))
             return
 
         self.send_response(404)

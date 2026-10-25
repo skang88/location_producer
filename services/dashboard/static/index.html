@@ -20,62 +20,10 @@
       font-size: 0.75rem;
     }
 
-    /* Pulse animation for 2D rescuer marker */
-    .pulse-ring {
-      border: 3px solid #ef4444;
-      border-radius: 50%;
-      height: 48px;
-      width: 48px;
-      position: absolute;
-      left: -24px;
-      top: -24px;
-      animation: pulsate 1.6s ease-out infinite;
-      opacity: 0;
-      pointer-events: none;
-    }
     @keyframes pulsate {
-      0% { transform: scale(0.2); opacity: 0; }
-      50% { opacity: 1; }
+      0% { transform: scale(0.3); opacity: 0; }
+      50% { opacity: 0.9; }
       100% { transform: scale(1.6); opacity: 0; }
-    }
-    .rescuer-dot {
-      width: 22px;
-      height: 22px;
-      background: #ef4444;
-      border: 3px solid white;
-      border-radius: 50%;
-      position: absolute;
-      left: -11px;
-      top: -11px;
-      box-shadow: 0 0 14px rgba(239, 68, 68, 0.95);
-      cursor: pointer;
-    }
-    .rescuer-label {
-      position: absolute;
-      left: 16px;
-      top: -14px;
-      background: rgba(15, 23, 42, 0.95);
-      color: #38bdf8;
-      font-weight: 800;
-      font-size: 12px;
-      padding: 3px 8px;
-      border-radius: 6px;
-      border: 1px solid #38bdf8;
-      white-space: nowrap;
-      pointer-events: none;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.7);
-    }
-    .heading-arrow {
-      position: absolute;
-      width: 0;
-      height: 0;
-      border-left: 6px solid transparent;
-      border-right: 6px solid transparent;
-      border-bottom: 14px solid #f59e0b;
-      top: -20px;
-      left: -6px;
-      transform-origin: 6px 20px;
-      pointer-events: none;
     }
   </style>
 </head>
@@ -93,14 +41,14 @@
     
     <!-- Controls & Status -->
     <div class="flex items-center space-x-3 text-xs">
-      <button onclick="focusAllRescuers()" class="flex items-center gap-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-300 px-3 py-1.5 rounded-lg border border-cyan-800 transition">
-        <span>🎯 전체 대원 위치 보기</span>
+      <button onclick="clearSelectedRescuer()" id="btnAllView" class="flex items-center gap-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-300 px-3 py-1.5 rounded-lg border border-cyan-800 transition">
+        <span>🎯 전체 대원 한눈에 보기</span>
       </button>
       <button onclick="locateBrowser()" class="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 px-3 py-1.5 rounded-lg border border-gray-700 transition">
         <span>📍 내 위치로 이동</span>
       </button>
       <button onclick="runSimulationDemo()" class="flex items-center gap-1.5 bg-blue-900/70 hover:bg-blue-800 text-blue-200 px-3 py-1.5 rounded-lg border border-blue-700 transition">
-        <span>▶ 대원 계단이동(3D) 시뮬레이션</span>
+        <span>▶ 대원 2명 계단이동(3D) 시뮬레이션</span>
       </button>
 
       <div class="h-4 w-px bg-gray-800 mx-1"></div>
@@ -119,7 +67,10 @@
     <div class="w-84 flex flex-col gap-4 shrink-0">
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col flex-1 overflow-hidden shadow-lg">
         <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-800">
-          <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
+            <span id="trackingModeBadge" class="text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800">전체 자동포괄</span>
+          </div>
           <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
             <input type="checkbox" id="autoPanToggle" checked class="rounded bg-gray-800 text-blue-600 focus:ring-0">
             <span>자동 트래킹</span>
@@ -166,18 +117,21 @@
         <div id="map"></div>
 
         <!-- 3D Three.js View -->
-        <div id="threeContainer" class="hidden relative bg-gray-950">
-          <div class="absolute top-3 left-3 z-10 bg-gray-900/90 border border-gray-700/80 rounded-lg p-3 text-xs text-gray-300 pointer-events-none space-y-1">
-            <div class="font-bold text-white flex items-center gap-1.5">
-              <span>🏢 실내 3차원 입체 궤적 관제 (3D Stairs Tracker)</span>
+        <div id="threeContainer" class="hidden relative w-full h-full bg-slate-950">
+          <div class="absolute top-3 left-3 z-10 bg-gray-900/90 border border-gray-700/80 rounded-lg p-3 text-xs text-gray-200 pointer-events-none space-y-1.5 shadow-xl">
+            <div class="font-bold text-white flex items-center gap-1.5 text-sm">
+              <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+              <span>🏢 실내 3차원 입체 건물 관제 (3D Stairs Tracker)</span>
             </div>
-            <div>• 좌클릭 드래그: 360° 자유 회전</div>
-            <div>• 마우스 휠: 줌인 / 줌아웃</div>
-            <div>• 우클릭 드래그: 카메라 시점 이동</div>
-            <div class="pt-1 text-[11px] text-cyan-400 font-semibold">각 층별 슬래브(3.2m 층고) 및 계단 이동 궤적 시각화</div>
+            <div class="text-gray-400">• 좌클릭 드래그: 360° 건물 자유 회전</div>
+            <div class="text-gray-400">• 마우스 휠: 줌인 / 줌아웃</div>
+            <div class="text-gray-400">• 우클릭 드래그: 시점 이동 (Pan)</div>
+            <div class="pt-1 text-[11px] text-cyan-300 font-semibold border-t border-gray-800">
+              층고 3.2m 기준 층별 슬래브(B1F~4F) 및 계단 3D 궤적 표시
+            </div>
           </div>
-          <div class="absolute bottom-3 right-3 z-10 bg-gray-900/90 border border-gray-700/80 rounded-lg p-2 text-xs text-gray-300">
-            <button onclick="reset3DCamera()" class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[11px] text-white">
+          <div class="absolute bottom-3 right-3 z-10 bg-gray-900/90 border border-gray-700/80 rounded-lg p-2 text-xs text-gray-300 flex items-center gap-2">
+            <button onclick="reset3DCamera()" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs text-white border border-gray-700 transition">
               ↺ 카메라 초기화
             </button>
           </div>
@@ -231,7 +185,6 @@
     // ==========================================
     // 1. 2D Leaflet Map Initialization
     // ==========================================
-    // Default initial center set to Uiryeong (where active rescuer is located)
     let currentMapCenter = [35.3195, 128.2484];
     const map = L.map('map', {
       zoomControl: true,
@@ -247,9 +200,11 @@
     const polylines = {};
     const markers = {};
     const anchorMarkers = {};
-    let hasCenteredOnRescuer = false;
 
-    // Load initial rescuers snapshot on page boot
+    // Multi-Rescuer Tracking Management
+    let selectedRescuerId = null; // null = entire bounds mode, or specific device_id
+    let lastFitBoundsTime = 0;
+
     function fetchInitialRescuers() {
       fetch('/api/rescuers')
         .then(res => res.json())
@@ -257,12 +212,8 @@
           const list = Object.values(data);
           if (list.length > 0) {
             list.forEach(handlePositionUpdate);
-            // Focus on first rescuer
-            const first = list.find(r => r.lat && r.lng);
-            if (first) {
-              map.setView([first.lat, first.lng], 19);
-              hasCenteredOnRescuer = true;
-            }
+            // Default: fit all rescuers
+            fitAllRescuers(true);
           }
         })
         .catch(err => console.error("Error fetching initial state:", err));
@@ -285,26 +236,31 @@
       }
     }
 
-    function focusAllRescuers() {
-      switchView('2D');
+    function fitAllRescuers(immediate = false) {
       const validLatLngs = Object.values(rescuers)
         .filter(r => r.lat && r.lng)
         .map(r => [r.lat, r.lng]);
 
       if (validLatLngs.length === 1) {
-        map.setView(validLatLngs[0], 19, { animate: true });
-        const id = Object.values(rescuers).find(r => r.lat && r.lng)?.device_id;
-        if (id && markers[id]) markers[id].openPopup();
+        if (immediate) map.setView(validLatLngs[0], 18);
+        else map.panTo(validLatLngs[0]);
       } else if (validLatLngs.length > 1) {
         const bounds = L.latLngBounds(validLatLngs);
-        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 19 });
-      } else {
-        alert("현재 등록된 대원 위치가 없습니다. 앱 또는 시뮬레이터를 켜주세요.");
+        // Avoid aggressive jittering by checking distance/time
+        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 18, animate: !immediate });
       }
     }
 
+    function clearSelectedRescuer() {
+      selectedRescuerId = null;
+      document.getElementById('trackingModeBadge').innerText = "전체 자동포괄";
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800";
+      switchView('2D');
+      fitAllRescuers(true);
+    }
+
     // ==========================================
-    // 2. 3D Three.js Building & Stairs Viewer
+    // 2. 3D Three.js Building & Stairs Viewer (Clear, Bright, Visible!)
     // ==========================================
     let scene, camera, renderer, controls;
     let threeInitialized = false;
@@ -317,13 +273,13 @@
       const height = container.clientHeight || 600;
 
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0a0e14);
-      scene.fog = new THREE.FogExp2(0x0a0e14, 0.015);
+      // Bright slate-dark background (Not pitch black!)
+      scene.background = new THREE.Color(0x0f172a);
 
       camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-      camera.position.set(30, 25, 35);
+      camera.position.set(28, 26, 32);
 
-      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
       renderer.setSize(width, height);
       renderer.setPixelRatio(window.devicePixelRatio);
       container.appendChild(renderer.domElement);
@@ -331,53 +287,78 @@
       controls = new THREE.OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
-      controls.target.set(0, 5, 0);
+      controls.target.set(0, 4, 0);
 
-      // Lighting
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+      // Bright Lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
       scene.add(ambientLight);
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      dirLight.position.set(20, 40, 20);
+
+      const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x1e293b, 1.0);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      dirLight.position.set(25, 45, 25);
       scene.add(dirLight);
 
-      // Building Floor Slabs Wireframe (B1F to 4F)
+      // Axis Helper
+      const axesHelper = new THREE.AxesHelper(6);
+      axesHelper.position.set(0, 0, 0);
+      scene.add(axesHelper);
+
+      // Building Floors (B1F to 4F) - Clear vivid slabs
       const floorElevations = [-3.2, 0.0, 3.2, 6.4, 9.6];
+      const floorNames = ["B1F", "1F (진입층)", "2F", "3F", "4F"];
+
       floorElevations.forEach((elev, idx) => {
-        const gridHelper = new THREE.GridHelper(30, 15, 0x38bdf8, 0x1e293b);
+        // Bright Grid
+        const gridHelper = new THREE.GridHelper(30, 15, idx === 1 ? 0x10b981 : 0x0ea5e9, 0x334155);
         gridHelper.position.y = elev;
         scene.add(gridHelper);
 
+        // Semi-transparent floor slab with border
         const slabGeo = new THREE.PlaneGeometry(30, 30);
-        const slabMat = new THREE.MeshBasicMaterial({
-          color: idx === 1 ? 0x064e3b : 0x0f172a,
+        const slabMat = new THREE.MeshStandardMaterial({
+          color: idx === 1 ? 0x064e3b : 0x1e293b,
           transparent: true,
-          opacity: 0.25,
+          opacity: idx === 1 ? 0.45 : 0.25,
           side: THREE.DoubleSide
         });
         const slab = new THREE.Mesh(slabGeo, slabMat);
         slab.rotation.x = Math.PI / 2;
         slab.position.y = elev;
         scene.add(slab);
+
+        // Wireframe edges around slab
+        const edges = new THREE.EdgesGeometry(slabGeo);
+        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 }));
+        line.rotation.x = Math.PI / 2;
+        line.position.y = elev;
+        scene.add(line);
       });
 
-      // Central Staircase Tower (Wireframe Cylinder)
-      const stairTowerGeo = new THREE.CylinderGeometry(4, 4, 15, 16, 5, true);
-      const stairTowerMat = new THREE.MeshBasicMaterial({
-        color: 0xf59e0b,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.2
-      });
-      const stairTower = new THREE.Mesh(stairTowerGeo, stairTowerMat);
-      stairTower.position.set(0, 3.5, 0);
+      // Staircase Shaft Tower (Center)
+      const stairTowerGeo = new THREE.BoxGeometry(7, 16, 7);
+      const stairEdges = new THREE.EdgesGeometry(stairTowerGeo);
+      const stairTower = new THREE.LineSegments(stairEdges, new THREE.LineBasicMaterial({ color: 0xf59e0b, linewidth: 2 }));
+      stairTower.position.set(0, 4, 0);
       scene.add(stairTower);
 
-      window.addEventListener('resize', () => {
+      // Building 4 Outer Columns
+      const colGeo = new THREE.CylinderGeometry(0.2, 0.2, 16, 8);
+      const colMat = new THREE.MeshStandardMaterial({ color: 0x64748b });
+      [[-15, -15], [15, -15], [-15, 15], [15, 15]].forEach(([cx, cz]) => {
+        const col = new THREE.Mesh(colGeo, colMat);
+        col.position.set(cx, 4, cz);
+        scene.add(col);
+      });
+
+      function onResize() {
         if (!container.clientWidth) return;
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(container.clientWidth, container.clientHeight);
-      });
+      }
+      window.addEventListener('resize', onResize);
 
       function animate() {
         requestAnimationFrame(animate);
@@ -399,8 +380,8 @@
 
     function reset3DCamera() {
       if (controls && camera) {
-        camera.position.set(30, 25, 35);
-        controls.target.set(0, 5, 0);
+        camera.position.set(28, 26, 32);
+        controls.target.set(0, 4, 0);
         controls.update();
       }
     }
@@ -422,17 +403,23 @@
         threeDiv.classList.remove('hidden');
         tab3D.className = "px-3.5 py-1.5 rounded-md font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800 transition flex items-center gap-1.5";
         tab2D.className = "px-3.5 py-1.5 rounded-md font-semibold text-gray-400 hover:text-white transition flex items-center gap-1.5";
+        
+        // Initialize 3D when container is visible
         init3DScene();
-        if (renderer && threeDiv.clientWidth) {
-          camera.aspect = threeDiv.clientWidth / threeDiv.clientHeight;
-          camera.updateProjectionMatrix();
-          renderer.setSize(threeDiv.clientWidth, threeDiv.clientHeight);
-        }
+        
+        // Force resize update
+        setTimeout(() => {
+          if (renderer && threeDiv.clientWidth) {
+            camera.aspect = threeDiv.clientWidth / threeDiv.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(threeDiv.clientWidth, threeDiv.clientHeight);
+          }
+        }, 60);
       }
     }
 
     function update3DRescuer(data) {
-      if (!threeInitialized) init3DScene();
+      if (!threeInitialized) return;
       const id = data.device_id;
       const px = data.rel_x || 0.0;
       const py = data.rel_z || 0.0;
@@ -440,28 +427,32 @@
 
       if (!rescuer3DObjects[id]) {
         const group = new THREE.Group();
-        const sphereGeo = new THREE.SphereGeometry(0.7, 16, 16);
+        
+        // Bright glowing Sphere
+        const sphereGeo = new THREE.SphereGeometry(0.8, 16, 16);
         const sphereMat = new THREE.MeshStandardMaterial({
           color: 0xef4444,
-          emissive: 0x991b1b,
-          roughness: 0.2
+          emissive: 0xdc2626,
+          roughness: 0.1
         });
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
         group.add(sphere);
 
-        const coneGeo = new THREE.ConeGeometry(0.4, 1.2, 8);
+        // Direction Cone
+        const coneGeo = new THREE.ConeGeometry(0.45, 1.4, 8);
         const coneMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
         const cone = new THREE.Mesh(coneGeo, coneMat);
         cone.rotation.x = Math.PI / 2;
-        cone.position.z = -1.0;
+        cone.position.z = -1.2;
         group.add(cone);
 
         scene.add(group);
 
+        // 3D Path Line
         const lineGeo = new THREE.BufferGeometry();
         const lineMat = new THREE.LineBasicMaterial({
           color: 0xf59e0b,
-          linewidth: 3
+          linewidth: 4
         });
         const line = new THREE.Line(lineGeo, lineMat);
         scene.add(line);
@@ -538,24 +529,27 @@
       const heading = data.heading_deg || 0;
       const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
 
-      // 1. Polyline trajectory (2D)
+      // 1. 2D Polyline trajectory
       if (!polylines[id]) {
+        // Distinct color per rescuer
+        const color = id.includes('02') || id.includes('2') ? '#38bdf8' : (isIndoor ? '#f59e0b' : '#10b981');
         polylines[id] = L.polyline([], {
-          color: isIndoor ? '#f59e0b' : '#10b981',
+          color: color,
           weight: 5,
           opacity: 0.9
         }).addTo(map);
       }
       polylines[id].addLatLng(latLng);
 
-      // 2. Create / Update 2D Marker (Visible, robust HTML icon)
+      // 2. 2D Marker
+      const badgeBg = id.includes('02') || id.includes('2') ? '#0284c7' : '#dc2626';
       if (!markers[id]) {
         const icon = L.divIcon({
           className: '',
           html: `
             <div style="position: relative; width: 34px; height: 34px;" onclick="focusRescuer('${id}')">
-              <div style="position: absolute; left: -10px; top: -10px; width: 54px; height: 54px; border-radius: 50%; border: 3px solid #ef4444; opacity: 0.7; animation: pulsate 1.5s infinite;"></div>
-              <div style="width: 34px; height: 34px; background-color: #dc2626; border: 2.5px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px rgba(220,38,38,0.9); display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
+              <div style="position: absolute; left: -10px; top: -10px; width: 54px; height: 54px; border-radius: 50%; border: 3px solid ${badgeBg}; opacity: 0.7; animation: pulsate 1.5s infinite;"></div>
+              <div style="width: 34px; height: 34px; background-color: ${badgeBg}; border: 2.5px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px ${badgeBg}; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
                 🚨
               </div>
               <div id="arrow_${id}" style="position: absolute; top: -14px; left: 11px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 12px solid #38bdf8; transform-origin: 6px 28px; transform: rotate(${heading}deg);"></div>
@@ -570,7 +564,7 @@
         markers[id] = L.marker(latLng, { icon: icon, zIndexOffset: 1000 }).addTo(map);
         markers[id].bindPopup(`
           <div style="font-size: 12px; color: #1e293b; min-width: 160px; line-height: 1.6;">
-            <div style="font-weight: bold; font-size: 14px; color: #dc2626; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;">
+            <div style="font-weight: bold; font-size: 14px; color: ${badgeBg}; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;">
               🚨 대원 ID: ${id}
             </div>
             <div>현재 층수: <b style="color: #d97706;">${floorStr} (고도: ${data.rel_z || 0}m)</b></div>
@@ -599,14 +593,22 @@
         anchorMarkers[id] = L.marker([data.anchor_gps.lat, data.anchor_gps.lng], { icon: anchorIcon }).addTo(map);
       }
 
-      // 4. Auto Pan / Zoom
+      // 4. Stable Multi-Rescuer Auto-Tracking
       const autoPan = document.getElementById('autoPanToggle').checked;
       if (autoPan) {
-        if (!hasCenteredOnRescuer) {
-          map.setView(latLng, 18);
-          hasCenteredOnRescuer = true;
+        if (selectedRescuerId) {
+          // If a specific rescuer is selected, follow only that rescuer
+          if (id === selectedRescuerId) {
+            map.panTo(latLng);
+          }
         } else {
-          map.panTo(latLng);
+          // If NO specific rescuer selected:
+          // Keep all active rescuers in bounds (Throttle to avoid jittering)
+          const now = Date.now();
+          if (now - lastFitBoundsTime > 2500) {
+            lastFitBoundsTime = now;
+            fitAllRescuers(false);
+          }
         }
       }
 
@@ -616,7 +618,7 @@
           update3DRescuer(data);
         }
       } catch (err) {
-        console.warn("3D scene update skipped:", err);
+        // ignore
       }
     }
 
@@ -624,31 +626,22 @@
     // 5. Focus Camera on Specific Rescuer (Click Action)
     // ==========================================
     function focusRescuer(id) {
+      selectedRescuerId = id;
       const r = rescuers[id];
       if (!r) return;
 
-      // Always switch to 2D view and invalidate size
+      document.getElementById('trackingModeBadge').innerText = `[${id}] 추적 고정`;
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded border border-amber-800";
+
       switchView('2D');
       map.invalidateSize();
 
       if (r.lat && r.lng) {
-        // Ensure 2D marker exists
-        if (!markers[id]) {
-          handlePositionUpdate(r);
-        }
-
-        // Set map view directly so tiles load immediately
+        if (!markers[id]) handlePositionUpdate(r);
         map.setView([r.lat, r.lng], 18);
-
-        // Open popup
-        if (markers[id]) {
-          markers[id].openPopup();
-        }
-      } else {
-        alert(`대원 [${id}]의 GPS/위치 데이터가 아직 수신되지 않았습니다.`);
+        if (markers[id]) markers[id].openPopup();
       }
 
-      // Also adjust 3D view target
       if (threeInitialized && rescuer3DObjects[id] && controls && camera) {
         const px = r.rel_x || 0.0;
         const py = r.rel_z || 0.0;
@@ -671,16 +664,18 @@
 
       listContainer.innerHTML = items.map(r => {
         const isIndoor = r.mode === 'INDOOR_DEAD_RECKONING';
+        const isSelected = r.device_id === selectedRescuerId;
         const floorStr = r.floor_str || (r.floor ? `${r.floor}F` : '1F');
         const relZ = r.rel_z ? (r.rel_z > 0 ? `+${r.rel_z}m` : `${r.rel_z}m`) : '+0.0m';
         const isClimbing = r.vertical_status === 'CLIMBING';
 
         return `
-          <div onclick="focusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isIndoor ? 'border-amber-600/70 hover:border-amber-500' : 'border-emerald-600/70 hover:border-emerald-500'} rounded-lg p-3 shadow-md space-y-2.5">
+          <div onclick="focusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
             <div class="flex items-center justify-between">
               <span class="font-bold text-white text-sm flex items-center gap-1.5">
                 <span class="w-2.5 h-2.5 rounded-full ${isIndoor ? 'bg-amber-400' : 'bg-emerald-400'}"></span>
                 ${r.device_id}
+                ${isSelected ? '<span class="text-[9px] bg-cyan-900 text-cyan-200 px-1 py-0.2 rounded">추적중</span>' : ''}
               </span>
               <div class="flex items-center gap-1">
                 <span class="text-xs px-2 py-0.5 rounded font-bold ${isClimbing ? 'bg-amber-500 text-black animate-pulse' : 'bg-cyan-950 text-cyan-300 border border-cyan-800'}">
@@ -707,11 +702,10 @@
               </div>
             </div>
 
-            <!-- Action Button -->
             <div class="pt-2 border-t border-gray-700/60 flex items-center justify-between">
-              <span class="text-[11px] text-gray-400 truncate">방위각: ${r.heading_deg || 0}°</span>
-              <button onclick="event.stopPropagation(); focusRescuer('${r.device_id}')" class="px-2.5 py-1 bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700 rounded text-[11px] font-medium flex items-center gap-1 transition">
-                <span>📍 대원 위치로 지도 이동</span>
+              <span class="text-[11px] text-gray-400 truncate">방위: ${r.heading_deg || 0}°</span>
+              <button onclick="event.stopPropagation(); focusRescuer('${r.device_id}')" class="px-2.5 py-1 ${isSelected ? 'bg-amber-600 text-white' : 'bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700'} rounded text-[11px] font-medium transition">
+                <span>${isSelected ? '✓ 추적 중' : '📍 이 대원만 추적'}</span>
               </button>
             </div>
           </div>
@@ -766,7 +760,7 @@
     }
 
     // ==========================================
-    // 8. Interactive 3D Stairs Simulation Demo
+    // 8. 2-Rescuers 3D Climbing Simulation Demo
     // ==========================================
     function runSimulationDemo() {
       switchView('3D');
@@ -774,54 +768,84 @@
       let step = 0;
       let startLat = map.getCenter().lat;
       let startLng = map.getCenter().lng;
-      let dx = 0, dy = 0, dz = 0;
-      let heading = 90;
 
       const simInterval = setInterval(() => {
         step++;
-        
-        if (step <= 6) {
-          dx += 0.65;
-          heading = 90;
-        } else if (step > 6 && step <= 22) {
-          const stairStep = step - 6;
-          dz = (stairStep / 16.0) * 6.4;
-          const angle = (stairStep / 16.0) * Math.PI * 4;
-          dx = 4.0 + 3.0 * Math.cos(angle);
-          dy = 3.0 * Math.sin(angle);
-          heading = ((angle * 180 / Math.PI) + 90) % 360;
+
+        // Rescuer 1 (Alpha): climbs to 3F
+        let dz1 = 0, dx1 = 0, dy1 = 0, h1 = 90;
+        if (step <= 5) {
+          dx1 = step * 0.7;
+        } else if (step > 5 && step <= 20) {
+          const s = step - 5;
+          dz1 = (s / 15.0) * 6.4;
+          const a = (s / 15.0) * Math.PI * 4;
+          dx1 = 3.5 + 3.0 * Math.cos(a);
+          dy1 = 3.0 * Math.sin(a);
+          h1 = ((a * 180 / Math.PI) + 90) % 360;
         } else {
-          dy += 0.65;
-          heading = 0;
+          dz1 = 6.4;
+          dy1 = (step - 20) * 0.7;
+          h1 = 0;
         }
 
-        const floorNum = Math.max(1, Math.min(3, 1 + Math.floor((dz + 1.6) / 3.2)));
-        const curLat = startLat + (dy / 111320.0);
-        const curLng = startLng + (dx / (111320.0 * Math.cos(startLat * Math.PI / 180)));
+        // Rescuer 2 (Bravo): climbs to 2F
+        let dz2 = 0, dx2 = 0, dy2 = 0, h2 = 270;
+        if (step <= 7) {
+          dx2 = -(step * 0.6);
+        } else if (step > 7 && step <= 18) {
+          const s = step - 7;
+          dz2 = (s / 11.0) * 3.2; // up to 2F
+          const a = (s / 11.0) * Math.PI * 3;
+          dx2 = -3.5 - 2.5 * Math.cos(a);
+          dy2 = -2.5 * Math.sin(a);
+          h2 = ((a * 180 / Math.PI) + 270) % 360;
+        } else {
+          dz2 = 3.2;
+          dx2 = -6.0 - (step - 18) * 0.6;
+          h2 = 180;
+        }
 
-        const mockData = {
-          device_id: "RESCUER_STAIRS",
+        const f1 = Math.max(1, Math.min(3, 1 + Math.floor((dz1 + 1.6) / 3.2)));
+        const f2 = Math.max(1, Math.min(2, 1 + Math.floor((dz2 + 1.6) / 3.2)));
+
+        // Send updates for both rescuers
+        handlePositionUpdate({
+          device_id: "RESCUER_01",
           mode: step > 3 ? "INDOOR_DEAD_RECKONING" : "GPS_OUTDOOR",
           anchor_gps: { lat: startLat, lng: startLng },
-          rel_x: Number(dx.toFixed(2)),
-          rel_y: Number(dy.toFixed(2)),
-          rel_z: Number(dz.toFixed(2)),
-          floor: floorNum,
-          floor_str: `${floorNum}F`,
-          vertical_status: (step > 6 && step <= 22) ? "CLIMBING" : "LEVEL",
-          lat: curLat,
-          lng: curLng,
-          heading_deg: Math.round(heading),
+          rel_x: Number(dx1.toFixed(2)),
+          rel_y: Number(dy1.toFixed(2)),
+          rel_z: Number(dz1.toFixed(2)),
+          floor: f1,
+          floor_str: `${f1}F`,
+          vertical_status: (step > 5 && step <= 20) ? "CLIMBING" : "LEVEL",
+          lat: startLat + (dy1 / 111320.0),
+          lng: startLng + (dx1 / (111320.0 * Math.cos(startLat * Math.PI / 180))),
+          heading_deg: Math.round(h1),
           steps: step,
-          distance: Number((step * 0.65).toFixed(2)),
-          is_stationary: false
-        };
-        handlePositionUpdate(mockData);
+          distance: Number((step * 0.7).toFixed(2))
+        });
 
-        if (step >= 30) {
-          clearInterval(simInterval);
-        }
-      }, 350);
+        handlePositionUpdate({
+          device_id: "RESCUER_02",
+          mode: step > 4 ? "INDOOR_DEAD_RECKONING" : "GPS_OUTDOOR",
+          anchor_gps: { lat: startLat, lng: startLng },
+          rel_x: Number(dx2.toFixed(2)),
+          rel_y: Number(dy2.toFixed(2)),
+          rel_z: Number(dz2.toFixed(2)),
+          floor: f2,
+          floor_str: `${f2}F`,
+          vertical_status: (step > 7 && step <= 18) ? "CLIMBING" : "LEVEL",
+          lat: startLat + (dy2 / 111320.0),
+          lng: startLng + (dx2 / (111320.0 * Math.cos(startLat * Math.PI / 180))),
+          heading_deg: Math.round(h2),
+          steps: step,
+          distance: Number((step * 0.6).toFixed(2))
+        });
+
+        if (step >= 28) clearInterval(simInterval);
+      }, 400);
     }
   </script>
 </body>

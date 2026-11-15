@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 data class ServiceStatus(
     val isRunning: Boolean = false,
@@ -104,9 +105,11 @@ class SensorStreamingService : Service() {
 
         when (action) {
             ACTION_START -> {
-                val brokerUrl = intent.getStringExtra(EXTRA_BROKER_URL) ?: "wss://mqtt.gnfire.opik.net/"
-                val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: "RESCUER_01"
-                startStreamingService(brokerUrl, deviceId)
+                val brokerUrl = intent.getStringExtra(EXTRA_BROKER_URL) ?: "ws://mqtt.gnfire.opik.net:80/"
+                val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: ""
+                if (deviceId.isNotEmpty()) {
+                    startStreamingService(brokerUrl, deviceId)
+                }
             }
             ACTION_STOP -> {
                 stopStreamingService()
@@ -143,6 +146,16 @@ class SensorStreamingService : Service() {
         streamingJob?.cancel()
         streamingJob = serviceScope.launch {
             val topic = "sensors/$deviceId/data"
+            val statusTopic = "sensors/$deviceId/status"
+
+            // Publish ONLINE status
+            val onlinePayload = JSONObject().apply {
+                put("device_id", deviceId)
+                put("status", "ONLINE")
+                put("timestamp", System.currentTimeMillis())
+            }.toString()
+            mqttStreamManager.publish(statusTopic, onlinePayload, qos = 1, retained = true)
+
             Log.d(TAG, "Publishing loop started for topic: $topic")
 
             // Sensor streaming loop running at ~20ms - 50ms interval (20Hz - 50Hz)
@@ -182,6 +195,18 @@ class SensorStreamingService : Service() {
 
         streamingJob?.cancel()
         streamingJob = null
+
+        val currentDeviceId = _serviceStatus.value.deviceId
+        if (currentDeviceId.isNotEmpty()) {
+            val statusTopic = "sensors/$currentDeviceId/status"
+            val offlinePayload = JSONObject().apply {
+                put("device_id", currentDeviceId)
+                put("status", "OFFLINE")
+                put("reason", "user_stopped")
+                put("timestamp", System.currentTimeMillis())
+            }.toString()
+            mqttStreamManager.publish(statusTopic, offlinePayload, qos = 1, retained = true)
+        }
 
         sensorCollector.stop()
         gpsCollector.stopLocationUpdates()

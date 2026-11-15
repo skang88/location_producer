@@ -13,6 +13,7 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttException
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import org.json.JSONObject
 import java.net.URI
 import java.util.UUID
 import javax.net.ssl.SSLContext
@@ -82,11 +83,21 @@ class MqttStreamManager {
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
             })
 
+            // LWT (Last Will and Testament) payload for unexpected disconnects
+            val willTopic = "sensors/$deviceId/status"
+            val willPayload = JSONObject().apply {
+                put("device_id", deviceId)
+                put("status", "OFFLINE")
+                put("reason", "unexpected_disconnect")
+                put("timestamp", System.currentTimeMillis())
+            }.toString().toByteArray(Charsets.UTF_8)
+
             val options = MqttConnectOptions().apply {
                 isCleanSession = true
                 connectionTimeout = 15
                 keepAliveInterval = 30
                 isAutomaticReconnect = true
+                setWill(willTopic, willPayload, 1, true) // Retained Will message
 
                 if (normalizedUri.startsWith("wss://") || normalizedUri.startsWith("ssl://")) {
                     try {
@@ -133,15 +144,15 @@ class MqttStreamManager {
 
     private fun normalizeBrokerUri(uri: String): String {
         var trimmed = uri.trim()
-        if (trimmed.isEmpty()) return "wss://mqtt.gnfire.opik.net:443/"
+        if (trimmed.isEmpty()) return "ws://mqtt.gnfire.opik.net:80/"
 
         if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
-            trimmed = "wss://$trimmed"
+            trimmed = "ws://$trimmed"
         }
 
         return try {
             val parsed = URI(trimmed)
-            val scheme = parsed.scheme ?: "wss"
+            val scheme = parsed.scheme ?: "ws"
             val host = parsed.host ?: return trimmed
             val port = parsed.port
             val path = if (parsed.path.isNullOrEmpty()) "/" else parsed.path
@@ -157,13 +168,14 @@ class MqttStreamManager {
         }
     }
 
-    fun publish(topic: String, jsonPayload: String, qos: Int = 0): Boolean {
+    fun publish(topic: String, jsonPayload: String, qos: Int = 0, retained: Boolean = false): Boolean {
         val client = mqttClient ?: return false
         if (!client.isConnected) return false
 
         return try {
             val message = MqttMessage(jsonPayload.toByteArray(Charsets.UTF_8)).apply {
                 this.qos = qos
+                this.isRetained = retained
             }
             client.publish(topic, message)
             true

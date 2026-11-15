@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "sensors/+/data")
+MQTT_STATUS_TOPIC = os.getenv("MQTT_STATUS_TOPIC", "sensors/+/status")
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw-sensor-data")
+KAFKA_STATUS_TOPIC = os.getenv("KAFKA_STATUS_TOPIC", "rescuer-status")
 
 def create_kafka_producer(retries=10, delay=3):
     """Wait for Kafka to be ready and initialize producer"""
@@ -46,7 +48,8 @@ def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         logger.info(f"Connected to Mosquitto broker at {MQTT_BROKER}:{MQTT_PORT}")
         client.subscribe(MQTT_TOPIC, qos=0)
-        logger.info(f"Subscribed to MQTT topic pattern: {MQTT_TOPIC}")
+        client.subscribe(MQTT_STATUS_TOPIC, qos=1)
+        logger.info(f"Subscribed to MQTT topics: {MQTT_TOPIC}, {MQTT_STATUS_TOPIC}")
     else:
         logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
 
@@ -64,8 +67,13 @@ def on_message(client, userdata, msg):
                 device_id = "UNKNOWN"
             payload["device_id"] = device_id
 
-        # Publish to Kafka partitioned by device_id to preserve time-series order
-        future = producer.send(KAFKA_TOPIC, key=device_id, value=payload)
+        if msg.topic.endswith("/status"):
+            payload["retained"] = bool(msg.retain)
+            producer.send(KAFKA_STATUS_TOPIC, key=device_id, value=payload)
+            logger.info(f"Status message forwarded [{device_id}]: {payload.get('status')} (reason={payload.get('reason')}, retained={msg.retain})")
+        else:
+            # Publish to Kafka partitioned by device_id to preserve time-series order
+            future = producer.send(KAFKA_TOPIC, key=device_id, value=payload)
         
         # Non-blocking / batching confirmation if needed
         # future.add_errback(lambda err: logger.error(f"Kafka publish error: {err}"))

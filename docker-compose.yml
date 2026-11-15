@@ -49,8 +49,10 @@ services:
       MQTT_BROKER: mosquitto
       MQTT_PORT: 1883
       MQTT_TOPIC: "sensors/+/data"
+      MQTT_STATUS_TOPIC: "sensors/+/status"
       KAFKA_BROKER: "kafka:9092"
       KAFKA_TOPIC: "raw-sensor-data"
+      KAFKA_STATUS_TOPIC: "rescuer-status"
     networks:
       - rescuer-net
 
@@ -65,6 +67,7 @@ services:
       KAFKA_BROKER: "kafka:9092"
       INPUT_TOPIC: "raw-sensor-data"
       OUTPUT_TOPIC: "rescuer-positions"
+      STATUS_TOPIC: "rescuer-status"
     networks:
       - rescuer-net
 
@@ -81,6 +84,7 @@ services:
       KAFKA_BROKER: "kafka:9092"
       POSITIONS_TOPIC: "rescuer-positions"
       RAW_SENSOR_TOPIC: "raw-sensor-data"
+      STATUS_TOPIC: "rescuer-status"
     networks:
       - rescuer-net
       - npm-net

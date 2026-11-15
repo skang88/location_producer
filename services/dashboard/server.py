@@ -19,8 +19,10 @@ KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 POSITIONS_TOPIC = os.getenv("POSITIONS_TOPIC", "rescuer-positions")
 RAW_SENSOR_TOPIC = os.getenv("RAW_SENSOR_TOPIC", "raw-sensor-data")
 COMMANDS_TOPIC = os.getenv("COMMANDS_TOPIC", "rescuer-commands")
+STATUS_TOPIC = os.getenv("STATUS_TOPIC", "rescuer-status")
 
 latest_rescuers = {}
+stopped_timestamps = {}
 sse_clients = set()
 clients_lock = threading.Lock()
 
@@ -63,6 +65,7 @@ def kafka_consumer_worker():
             consumer = KafkaConsumer(
                 POSITIONS_TOPIC,
                 RAW_SENSOR_TOPIC,
+                STATUS_TOPIC,
                 bootstrap_servers=KAFKA_BROKER,
                 group_id="dashboard-monitoring-group",
                 auto_offset_reset="latest",
@@ -86,7 +89,39 @@ def kafka_consumer_worker():
             data = msg.value
             device_id = data.get("device_id", msg.key or "UNKNOWN")
 
-            if topic == POSITIONS_TOPIC:
+            if topic == STATUS_TOPIC:
+                status = data.get("status")
+                reason = data.get("reason")
+                if status == "ONLINE":
+                    stopped_timestamps.pop(device_id, None)
+                    if device_id in latest_rescuers:
+                        latest_rescuers[device_id]["connection_status"] = "ONLINE"
+                        latest_rescuers[device_id].pop("disconnect_reason", None)
+                        broadcast_sse("RESCUER_STATUS", {"device_id": device_id, "status": "ONLINE"})
+                elif status == "OFFLINE":
+                    if reason == "user_stopped":
+                        stopped_timestamps[device_id] = time.time()
+                        if device_id in latest_rescuers:
+                            latest_rescuers.pop(device_id, None)
+                            broadcast_sse("RESCUER_DELETED", {"device_id": device_id, "reason": "user_stopped"})
+                        logger.info(f"🛑 Rescuer {device_id} stopped by user; removed from dashboard.")
+                    else:
+                        if device_id in latest_rescuers:
+                            latest_rescuers[device_id]["connection_status"] = "SIGNAL_LOST"
+                            latest_rescuers[device_id]["disconnect_reason"] = reason or "unexpected_disconnect"
+                            broadcast_sse("RESCUER_STATUS", {
+                                "device_id": device_id,
+                                "status": "SIGNAL_LOST",
+                                "reason": reason or "unexpected_disconnect"
+                            })
+                        logger.warning(f"⚠️ Rescuer {device_id} unexpected disconnect ({reason}); keeping last position.")
+
+            elif topic == POSITIONS_TOPIC:
+                if device_id in stopped_timestamps:
+                    if time.time() - stopped_timestamps[device_id] < 2.0:
+                        continue
+                    stopped_timestamps.pop(device_id, None)
+                data["connection_status"] = "ONLINE"
                 latest_rescuers[device_id] = data
                 broadcast_sse("POSITION_UPDATE", data)
 

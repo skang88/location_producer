@@ -16,6 +16,7 @@ KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 INPUT_TOPIC = os.getenv("INPUT_TOPIC", "raw-sensor-data")
 OUTPUT_TOPIC = os.getenv("OUTPUT_TOPIC", "rescuer-positions")
 COMMANDS_TOPIC = os.getenv("COMMANDS_TOPIC", "rescuer-commands")
+STATUS_TOPIC = os.getenv("STATUS_TOPIC", "rescuer-status")
 
 def init_kafka(retries=10, delay=3):
     """Initialize Kafka Consumer and Producer"""
@@ -25,6 +26,7 @@ def init_kafka(retries=10, delay=3):
             consumer = KafkaConsumer(
                 INPUT_TOPIC,
                 COMMANDS_TOPIC,
+                STATUS_TOPIC,
                 bootstrap_servers=KAFKA_BROKER,
                 group_id="location-processing-group",
                 auto_offset_reset="latest",
@@ -50,14 +52,32 @@ def main():
     consumer, producer = init_kafka()
     trackers = {} # device_id -> RescuerTracker
     last_log_time = {}
+    stopped_timestamps = {} # device_id -> time.time() when user_stopped
 
-    logger.info(f"Listening for sensor stream on topic '{INPUT_TOPIC}'...")
+    logger.info(f"Listening for sensor stream on topic '{INPUT_TOPIC}' and status on '{STATUS_TOPIC}'...")
 
     for message in consumer:
         try:
             data = message.value
             device_id = data.get("device_id", message.key or "UNKNOWN")
             timestamp = data.get("timestamp", time.time() * 1000)
+
+            # Handle Device Lifecycle Status (ONLINE / OFFLINE)
+            if message.topic == STATUS_TOPIC:
+                status = data.get("status")
+                reason = data.get("reason")
+                if status == "ONLINE":
+                    stopped_timestamps.pop(device_id, None)
+                    logger.info(f"🟢 Rescuer {device_id} is ONLINE.")
+                elif status == "OFFLINE":
+                    if reason == "user_stopped":
+                        stopped_timestamps[device_id] = time.time()
+                        trackers.pop(device_id, None)
+                        last_log_time.pop(device_id, None)
+                        logger.info(f"🛑 Rescuer {device_id} stopped by user. Removed from Location Engine.")
+                    else:
+                        logger.warning(f"⚠️ Rescuer {device_id} unexpected disconnect ({reason}). Preserving tracker state.")
+                continue
 
             # Handle Manual Commander Actions (Delete / Calibrate)
             if message.topic == COMMANDS_TOPIC:
@@ -86,6 +106,12 @@ def main():
                         trackers[device_id].reset_calibration()
                         logger.info(f"🔄 Rescuer {device_id} calibration reset to auto GPS")
                 continue
+
+            # Drop lingering in-flight QoS 0 sensor packets immediately after user_stopped
+            if device_id in stopped_timestamps:
+                if time.time() - stopped_timestamps[device_id] < 2.0:
+                    continue
+                stopped_timestamps.pop(device_id, None)
 
             if device_id not in trackers:
                 logger.info(f"New rescuer device registered: {device_id}")

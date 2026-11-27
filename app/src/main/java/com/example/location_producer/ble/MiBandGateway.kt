@@ -20,7 +20,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.example.location_producer.model.HeartRateData
+import com.example.location_producer.model.VitalsData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,20 +29,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 enum class BleConnectionStatus {
     DISCONNECTED,
     CONNECTING,
-    AUTHENTICATING,
     CONNECTED_STREAMING,
     ERROR
-}
-
-enum class BleAuthMode {
-    STANDARD_HRS,
-    MI_BAND_AUTH
 }
 
 data class DiscoveredBleDevice(
@@ -54,19 +47,13 @@ data class DiscoveredBleDevice(
 
 data class MiBandGatewayState(
     val status: BleConnectionStatus = BleConnectionStatus.DISCONNECTED,
-    val mode: BleAuthMode = BleAuthMode.STANDARD_HRS,
     val deviceName: String = "",
     val deviceAddress: String = "",
     val bpm: Int = 0,
-    val isHrValid: Boolean = false,
-    val lastHrUpdatedAt: Long = 0L,
+    val spo2: Int = 0,
+    val isVitalsValid: Boolean = false,
+    val lastUpdatedAt: Long = 0L,
     val statusMessage: String? = null
-)
-
-private data class AuthAttemptSpec(
-    val authFlag: Byte,
-    val useCryptFlag: Boolean,
-    val includeProtocolVersion: Boolean = false
 )
 
 class MiBandGateway private constructor(private val appContext: Context) {
@@ -74,16 +61,8 @@ class MiBandGateway private constructor(private val appContext: Context) {
     companion object {
         private const val TAG = "MiBandGateway"
         private const val GATT_OP_TIMEOUT_MS = 2_000L
-        private const val AUTH_ATTEMPT_TIMEOUT_MS = 10_000L
-        private const val HR_PING_INTERVAL_MS = 12_000L
-        private const val HR_FRESHNESS_TIMEOUT_MS = 15_000L
+        private const val VITALS_FRESHNESS_TIMEOUT_MS = 15_000L
         private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 10_000L)
-
-        private val AUTH_ATTEMPTS = listOf(
-            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_LEGACY, useCryptFlag = false, includeProtocolVersion = false),
-            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = false),
-            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = true, includeProtocolVersion = false)
-        )
 
         @Volatile
         private var instance: MiBandGateway? = null
@@ -118,8 +97,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
     private var scanTimeoutJob: Job? = null
 
     private var bluetoothGatt: BluetoothGatt? = null
-    private var authJob: Job? = null
-    private var pingJob: Job? = null
     private var reconnectJob: Job? = null
     private var opWatchdogJob: Job? = null
 
@@ -131,23 +108,10 @@ class MiBandGateway private constructor(private val appContext: Context) {
     private var userInitiatedDisconnect = false
 
     @Volatile
-    private var authFailed = false
-
-    @Volatile
     private var reconnectAttempt = 0
 
     private var targetAddress: String = ""
     private var targetName: String = ""
-    private var targetAuthKeyHex: String = ""
-    private var activeAuthKeyBytes: ByteArray? = null
-    private var forcePairingFirst = false
-
-    private var currentAuthFlag: Byte = MiBandProtocol.AUTH_FLAG_DEFAULT
-    private var activeUseCryptFlag = false
-    private var challengeReceived = false
-
-    private var lastChallenge16: ByteArray? = null
-    private var fallbackIndex = 0
 
     fun hasBluetoothConnectPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -336,12 +300,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
         return lower.contains("mi smart band") || lower.contains("mi band") || lower.contains("smart band")
     }
 
-    fun connect(
-        address: String,
-        name: String = "",
-        authKeyHex: String = "",
-        forcePairFirst: Boolean = false
-    ) {
+    fun connect(address: String, name: String = "") {
         val cleanAddress = address.trim()
         if (cleanAddress.isEmpty()) {
             _gatewayState.value = MiBandGatewayState(
@@ -372,32 +331,13 @@ class MiBandGateway private constructor(private val appContext: Context) {
             return
         }
 
-        val parsedKey = if (authKeyHex.isBlank()) {
-            null
-        } else {
-            MiBandProtocol.parseAuthKeyHex(authKeyHex) ?: run {
-                _gatewayState.value = MiBandGatewayState(
-                    status = BleConnectionStatus.ERROR,
-                    mode = BleAuthMode.MI_BAND_AUTH,
-                    deviceName = name,
-                    deviceAddress = cleanAddress,
-                    statusMessage = "Auth Key 형식이 올바르지 않습니다 (32자리 hex)"
-                )
-                return
-            }
-        }
-
         stopScan()
         reconnectJob?.cancel()
         cleanupGatt()
 
         targetAddress = cleanAddress
         targetName = name.ifBlank { cleanAddress }
-        targetAuthKeyHex = authKeyHex
-        activeAuthKeyBytes = parsedKey
-        forcePairingFirst = forcePairFirst
         userInitiatedDisconnect = false
-        authFailed = false
         reconnectAttempt = 0
 
         openGattConnection()
@@ -408,17 +348,16 @@ class MiBandGateway private constructor(private val appContext: Context) {
         if (!hasBluetoothConnectPermission()) return
         val adapter = bluetoothAdapter ?: return
 
-        val mode = if (activeAuthKeyBytes != null) BleAuthMode.MI_BAND_AUTH else BleAuthMode.STANDARD_HRS
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.CONNECTING,
-            mode = mode,
             deviceName = targetName,
             deviceAddress = targetAddress,
             bpm = 0,
-            isHrValid = false,
+            spo2 = 0,
+            isVitalsValid = false,
             statusMessage = "BLE 연결 중... ($targetName)"
         )
-        logMsg("연결 시도: $targetName ($targetAddress), mode=$mode, pairFirst=$forcePairingFirst")
+        logMsg("연결 시도: $targetName ($targetAddress)")
 
         try {
             val device = adapter.getRemoteDevice(targetAddress)
@@ -452,22 +391,9 @@ class MiBandGateway private constructor(private val appContext: Context) {
         reconnectJob = null
         stopScan()
 
-        val gatt = bluetoothGatt
-        if (gatt != null && activeAuthKeyBytes != null && hasBluetoothConnectPermission()) {
-            val hrService = gatt.getService(MiBandProtocol.SERVICE_HEART_RATE)
-            val hrControl = hrService?.getCharacteristic(MiBandProtocol.CHAR_HEART_RATE_CONTROL_POINT)
-            if (hrControl != null) {
-                try {
-                    writeCharacteristicRaw(gatt, hrControl, MiBandProtocol.CMD_HR_STOP_CONTINUOUS)
-                } catch (_: Exception) {
-                }
-            }
-        }
-
         cleanupGatt()
         _gatewayState.value = MiBandGatewayState(
             status = BleConnectionStatus.DISCONNECTED,
-            mode = if (activeAuthKeyBytes != null) BleAuthMode.MI_BAND_AUTH else BleAuthMode.STANDARD_HRS,
             deviceName = targetName,
             deviceAddress = targetAddress,
             statusMessage = "연결 해제됨"
@@ -477,10 +403,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
     @SuppressLint("MissingPermission")
     private fun cleanupGatt() {
-        authJob?.cancel()
-        authJob = null
-        pingJob?.cancel()
-        pingJob = null
         opWatchdogJob?.cancel()
         opWatchdogJob = null
         clearGattQueue()
@@ -537,7 +459,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
                 opWatchdogJob?.cancel()
                 opWatchdogJob = scope.launch {
                     delay(GATT_OP_TIMEOUT_MS)
-                    logMsg("GATT 명령 응답 타임아웃 — 다음 명령 진행")
+                    logMsg("GATT 명령 응답 타임아웃 — 다음 진행")
                     onGattOperationComplete()
                 }
                 return
@@ -564,20 +486,21 @@ class MiBandGateway private constructor(private val appContext: Context) {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 logMsg("GATT 연결 종료 (status=$status)")
                 cleanupGatt()
-                if (!userInitiatedDisconnect && !authFailed && targetAddress.isNotEmpty()) {
+                if (!userInitiatedDisconnect && targetAddress.isNotEmpty()) {
                     scheduleReconnect()
-                } else if (!authFailed) {
+                } else {
                     _gatewayState.value = _gatewayState.value.copy(
                         status = BleConnectionStatus.DISCONNECTED,
                         bpm = 0,
-                        isHrValid = false,
+                        spo2 = 0,
+                        isVitalsValid = false,
                         statusMessage = "연결 끊김 (status=$status)"
                     )
                 }
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
                 logMsg("GATT 연결 오류 (status=$status, newState=$newState)")
                 cleanupGatt()
-                if (!userInitiatedDisconnect && !authFailed && targetAddress.isNotEmpty()) {
+                if (!userInitiatedDisconnect && targetAddress.isNotEmpty()) {
                     scheduleReconnect()
                 }
             }
@@ -593,26 +516,8 @@ class MiBandGateway private constructor(private val appContext: Context) {
                 return
             }
 
-            val baseService = gatt.getService(MiBandProtocol.SERVICE_HUAMI_BASE)
-            val hasChunked2021 = baseService?.getCharacteristic(MiBandProtocol.CHAR_CHUNKED_2021_WRITE) != null &&
-                baseService.getCharacteristic(MiBandProtocol.CHAR_CHUNKED_2021_READ) != null
-
-            if (activeAuthKeyBytes != null) {
-                val authService = gatt.getService(MiBandProtocol.SERVICE_HUAMI_AUTH)
-                val authChar = authService?.getCharacteristic(MiBandProtocol.CHAR_HUAMI_AUTH)
-                if (authChar != null) {
-                    logMsg(
-                        "서비스 탐색 완료: 0x0009(props=0x${authChar.properties.toString(16)}), " +
-                            "2021chunked=$hasChunked2021"
-                    )
-                    startHuamiAuthentication(gatt, authChar)
-                } else {
-                    logMsg("Huami Auth 서비스(0xFEE1)를 찾지 못해 표준 BLE(0x180D) 모드로 전환합니다.")
-                    subscribeHeartRate(gatt, sendControlCommands = false)
-                }
-            } else {
-                subscribeHeartRate(gatt, sendControlCommands = false)
-            }
+            logMsg("서비스 탐색 완료 — 표준 심박수(0x180D) & 산소포화도(0x1822) 구독")
+            subscribeVitalsServices(gatt)
         }
 
         override fun onDescriptorWrite(
@@ -642,7 +547,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
-            handleCharacteristicChanged(gatt, characteristic, value)
+            handleCharacteristicChanged(characteristic, value)
         }
 
         @Deprecated("Deprecated in API 33")
@@ -653,249 +558,65 @@ class MiBandGateway private constructor(private val appContext: Context) {
         ) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 val value = characteristic.value ?: return
-                handleCharacteristicChanged(gatt, characteristic, value)
+                handleCharacteristicChanged(characteristic, value)
             }
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun startHuamiAuthentication(
-        gatt: BluetoothGatt,
-        authChar: BluetoothGattCharacteristic
-    ) {
-        currentAuthFlag = MiBandProtocol.AUTH_FLAG_DEFAULT
-        activeUseCryptFlag = false
-        challengeReceived = false
-        lastChallenge16 = null
-        fallbackIndex = 0
+    private fun subscribeVitalsServices(gatt: BluetoothGatt) {
+        val hrService = gatt.getService(MiBandProtocol.SERVICE_HEART_RATE)
+        val hrChar = hrService?.getCharacteristic(MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT)
+
+        val plxService = gatt.getService(MiBandProtocol.SERVICE_PULSE_OXIMETER)
+        val plxChar = plxService?.getCharacteristic(MiBandProtocol.CHAR_PLX_CONTINUOUS_MEASUREMENT)
+            ?: plxService?.getCharacteristic(MiBandProtocol.CHAR_PLX_SPOT_CHECK_MEASUREMENT)
+
+        if (hrChar != null) {
+            enableNotification(gatt, hrChar)
+            logMsg("표준 BLE Heart Rate(0x2A37) Notification 구독 성공")
+        } else {
+            logMsg("경고: Heart Rate Service(0x180D) 특성을 찾을 수 없습니다.")
+        }
+
+        if (plxChar != null) {
+            enableNotification(gatt, plxChar)
+            logMsg("표준 BLE Pulse Oximeter(SpO2) Notification 구독 성공")
+        }
 
         _gatewayState.value = _gatewayState.value.copy(
-            status = BleConnectionStatus.AUTHENTICATING,
-            mode = BleAuthMode.MI_BAND_AUTH,
-            statusMessage = "Mi Band Auth 인증 중..."
+            status = BleConnectionStatus.CONNECTED_STREAMING,
+            statusMessage = "BLE 심박수 & 산소포화도 수신 중"
         )
-        logMsg("Mi Band 6 AES 인증 시작 (forcePairFirst=$forcePairingFirst)")
-
-        enableNotification(gatt, authChar)
-
-        if (forcePairingFirst && activeAuthKeyBytes != null) {
-            val sendKeyPayload = MiBandProtocol.buildSendKeyRequest(activeAuthKeyBytes!!)
-            logMsg("직접 페어링(0x01) 요청 발송 — 밴드 화면의 '페어링 승인(✔)' 터치 필요!")
-            _gatewayState.value = _gatewayState.value.copy(
-                statusMessage = "밴드 화면의 '페어링 승인(✔)' 알림을 터치해 주세요!"
-            )
-            enqueueGattOperation {
-                writeCharacteristicRaw(gatt, authChar, sendKeyPayload)
-            }
-            return
-        }
-
-        authJob?.cancel()
-        authJob = scope.launch {
-            for ((index, attempt) in AUTH_ATTEMPTS.withIndex()) {
-                if (challengeReceived ||
-                    bluetoothGatt !== gatt ||
-                    _gatewayState.value.status != BleConnectionStatus.AUTHENTICATING
-                ) {
-                    return@launch
-                }
-
-                currentAuthFlag = attempt.authFlag
-                activeUseCryptFlag = attempt.useCryptFlag
-                val payload = MiBandProtocol.buildRequestRandomChallenge(
-                    authFlag = attempt.authFlag,
-                    useCryptFlag = attempt.useCryptFlag,
-                    includeProtocolVersion = attempt.includeProtocolVersion
-                )
-                logMsg("Auth TX (#${index + 1}/${AUTH_ATTEMPTS.size}): ${MiBandProtocol.bytesToHex(payload)}")
-                enqueueGattOperation {
-                    writeCharacteristicRaw(gatt, authChar, payload)
-                }
-
-                delay(AUTH_ATTEMPT_TIMEOUT_MS)
-            }
-
-            if (!challengeReceived &&
-                bluetoothGatt === gatt &&
-                _gatewayState.value.status == BleConnectionStatus.AUTHENTICATING
-            ) {
-                authFailed = true
-                val msg = "Mi Band 인증 응답 타임아웃 (Operation Logs 확인 필요)"
-                logMsg(msg)
-                _gatewayState.value = _gatewayState.value.copy(
-                    status = BleConnectionStatus.ERROR,
-                    bpm = 0,
-                    isHrValid = false,
-                    statusMessage = msg
-                )
-                cleanupGatt()
-            }
-        }
     }
 
     private fun handleCharacteristicChanged(
-        gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         value: ByteArray
     ) {
-        when (characteristic.uuid) {
-            MiBandProtocol.CHAR_HUAMI_AUTH -> handleAuthNotification(gatt, characteristic, value)
-            MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT -> handleHeartRateNotification(value)
-        }
-    }
-
-    private fun handleAuthNotification(
-        gatt: BluetoothGatt,
-        authChar: BluetoothGattCharacteristic,
-        value: ByteArray
-    ) {
-        logMsg("Auth RX: ${MiBandProtocol.bytesToHex(value)}")
-        val parsed = MiBandProtocol.parseAuthNotification(value)
-        when (parsed) {
-            is MiBandProtocol.AuthNotification.PairSuccess -> {
-                logMsg("밴드 직접 페어링(0x01) 승인 수신! — AES 챌린지 인증 계속 진행")
-                _gatewayState.value = _gatewayState.value.copy(
-                    statusMessage = "밴드 승인 완료 — AES 챌린지 인증 중..."
-                )
-                val payload = MiBandProtocol.buildRequestRandomChallenge(currentAuthFlag, activeUseCryptFlag)
-                enqueueGattOperation {
-                    writeCharacteristicRaw(gatt, authChar, payload)
-                }
-            }
-            is MiBandProtocol.AuthNotification.Challenge -> {
-                challengeReceived = true
-                fallbackIndex = 0
-                authJob?.cancel()
-                val key = activeAuthKeyBytes ?: return
-                lastChallenge16 = parsed.random16
-                // Default standard response uses cmd 0x03 (useCrypt = false)
-                val useCrypt = parsed.command == 0x82.toByte()
-                logMsg("인증 챌린지 수신 — AES 응답 전송 (cmd=${if (useCrypt) "0x83" else "0x03"}, flag=0x${String.format("%02X", currentAuthFlag)})")
-                val response = MiBandProtocol.buildEncryptedAuthResponse(
-                    authKey16 = key,
-                    random16 = parsed.random16,
-                    authFlag = currentAuthFlag,
-                    useCryptFlag = useCrypt
-                )
-                logMsg("Auth TX (resp #0): ${MiBandProtocol.bytesToHex(response)}")
-                enqueueGattOperation {
-                    writeCharacteristicRaw(gatt, authChar, response)
-                }
-            }
-            is MiBandProtocol.AuthNotification.AuthSuccess -> {
-                authJob?.cancel()
-                logMsg("Mi Band Auth SUCCESS — 연속 심박 측정 시작")
-                subscribeHeartRate(gatt, sendControlCommands = true)
-            }
-            is MiBandProtocol.AuthNotification.AuthFailure -> {
-                val cmdHex = String.format("%02X", parsed.command)
-                val statusHex = String.format("%02X", parsed.status)
-                logMsg("Auth RX Failure: cmd=0x$cmdHex, status=0x$statusHex")
-
-                val challenge = lastChallenge16
-                val key = activeAuthKeyBytes
-                if (fallbackIndex < 3 && key != null && challenge != null) {
-                    fallbackIndex++
-                    val (fallbackFlag, fallbackCrypt) = when (fallbackIndex) {
-                        1 -> Pair(MiBandProtocol.AUTH_FLAG_LEGACY, false)    // 0x03 0x08
-                        2 -> Pair(MiBandProtocol.AUTH_FLAG_DEFAULT, true)   // 0x83 0x00
-                        else -> Pair(MiBandProtocol.AUTH_FLAG_LEGACY, true) // 0x83 0x08
-                    }
-                    val cmdLabel = if (fallbackCrypt) "0x83" else "0x03"
-                    val flagLabel = String.format("%02X", fallbackFlag)
-                    logMsg("AES 응답 거부(status=0x$statusHex) — 재시도 #$fallbackIndex (cmd=$cmdLabel, flag=0x$flagLabel)")
-                    val response = MiBandProtocol.buildEncryptedAuthResponse(
-                        authKey16 = key,
-                        random16 = challenge,
-                        authFlag = fallbackFlag,
-                        useCryptFlag = fallbackCrypt
-                    )
-                    logMsg("Auth TX (resp #$fallbackIndex): ${MiBandProtocol.bytesToHex(response)}")
-                    enqueueGattOperation {
-                        writeCharacteristicRaw(gatt, authChar, response)
-                    }
-                    return
-                }
-
-                authJob?.cancel()
-                authFailed = true
-                val msg = "Mi Band 인증 실패 (cmd=0x$cmdHex, status=0x$statusHex). 'Pair/Bind (0x01)' 버튼을 누르고 밴드 화면의 ✔를 터치해 보세요."
-                logMsg(msg)
-                _gatewayState.value = _gatewayState.value.copy(
-                    status = BleConnectionStatus.ERROR,
-                    bpm = 0,
-                    isHrValid = false,
-                    statusMessage = msg
-                )
-                cleanupGatt()
-            }
-            is MiBandProtocol.AuthNotification.Unknown -> {
-                logMsg("알 수 없는 Auth 응답: ${MiBandProtocol.bytesToHex(parsed.raw)}")
-            }
-        }
-    }
-
-    private fun subscribeHeartRate(gatt: BluetoothGatt, sendControlCommands: Boolean) {
-        val hrService = gatt.getService(MiBandProtocol.SERVICE_HEART_RATE)
-        val hrChar = hrService?.getCharacteristic(MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT)
-        if (hrChar == null) {
-            val msg = "Heart Rate Service(0x180D)를 찾을 수 없습니다."
-            logMsg(msg)
-            _gatewayState.value = _gatewayState.value.copy(
-                status = BleConnectionStatus.ERROR,
-                statusMessage = msg
-            )
-            return
-        }
-
-        enableNotification(gatt, hrChar)
-
-        val hrControl = hrService.getCharacteristic(MiBandProtocol.CHAR_HEART_RATE_CONTROL_POINT)
-        if (sendControlCommands && hrControl != null) {
-            enqueueGattOperation { writeCharacteristicRaw(gatt, hrControl, MiBandProtocol.CMD_HR_STOP_MANUAL) }
-            enqueueGattOperation { writeCharacteristicRaw(gatt, hrControl, MiBandProtocol.CMD_HR_STOP_CONTINUOUS) }
-            enqueueGattOperation { writeCharacteristicRaw(gatt, hrControl, MiBandProtocol.CMD_HR_START_CONTINUOUS) }
-
-            pingJob?.cancel()
-            pingJob = scope.launch {
-                while (isActive) {
-                    delay(HR_PING_INTERVAL_MS)
-                    if (bluetoothGatt === gatt &&
-                        _gatewayState.value.status == BleConnectionStatus.CONNECTED_STREAMING
-                    ) {
-                        enqueueGattOperation {
-                            writeCharacteristicRaw(gatt, hrControl, MiBandProtocol.CMD_HR_PING)
-                        }
-                    }
-                }
-            }
-
-            _gatewayState.value = _gatewayState.value.copy(
-                status = BleConnectionStatus.CONNECTED_STREAMING,
-                mode = BleAuthMode.MI_BAND_AUTH,
-                statusMessage = "Mi Band 연속 심박수 스트리밍 중"
-            )
-            logMsg("연속 심박 측정 활성화 및 Keep-Alive 시작")
-        } else {
-            _gatewayState.value = _gatewayState.value.copy(
-                status = BleConnectionStatus.CONNECTED_STREAMING,
-                mode = BleAuthMode.STANDARD_HRS,
-                statusMessage = "표준 BLE 심박수(0x180D) 구독 중 — 값 대기"
-            )
-            logMsg("표준 BLE Heart Rate(0x2A37) Notification 구독 시작")
-        }
-    }
-
-    private fun handleHeartRateNotification(value: ByteArray) {
-        val bpm = MiBandProtocol.parseHeartRateMeasurement(value) ?: return
         val now = System.currentTimeMillis()
-        _gatewayState.value = _gatewayState.value.copy(
-            status = BleConnectionStatus.CONNECTED_STREAMING,
-            bpm = bpm,
-            isHrValid = true,
-            lastHrUpdatedAt = now,
-            statusMessage = "수신 중: $bpm BPM"
-        )
+        when (characteristic.uuid) {
+            MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT -> {
+                val bpm = MiBandProtocol.parseHeartRateMeasurement(value) ?: return
+                _gatewayState.value = _gatewayState.value.copy(
+                    status = BleConnectionStatus.CONNECTED_STREAMING,
+                    bpm = bpm,
+                    isVitalsValid = true,
+                    lastUpdatedAt = now,
+                    statusMessage = "수신 중: $bpm BPM"
+                )
+            }
+            MiBandProtocol.CHAR_PLX_CONTINUOUS_MEASUREMENT,
+            MiBandProtocol.CHAR_PLX_SPOT_CHECK_MEASUREMENT -> {
+                val spo2 = MiBandProtocol.parseSpO2Measurement(value) ?: return
+                _gatewayState.value = _gatewayState.value.copy(
+                    status = BleConnectionStatus.CONNECTED_STREAMING,
+                    spo2 = spo2,
+                    isVitalsValid = true,
+                    lastUpdatedAt = now,
+                    statusMessage = "SpO2 수신 중: $spo2 %"
+                )
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -916,41 +637,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
                 writeDescriptorRaw(gatt, cccd, valToSet)
             }
         }
-    }
-
-    @SuppressLint("MissingPermission")
-    @Suppress("DEPRECATION")
-    private fun writeCharacteristicRaw(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic,
-        value: ByteArray
-    ): Boolean {
-        if (!hasBluetoothConnectPermission()) return false
-
-        val writeType = if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0) {
-            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        } else {
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        }
-
-        characteristic.value = value
-        characteristic.writeType = writeType
-
-        val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(
-                characteristic,
-                value,
-                writeType
-            ) == BluetoothStatusCodes.SUCCESS
-        } else {
-            gatt.writeCharacteristic(characteristic)
-        }
-
-        if (success && writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
-            onGattOperationComplete()
-        }
-
-        return success
     }
 
     @SuppressLint("MissingPermission")
@@ -976,26 +662,28 @@ class MiBandGateway private constructor(private val appContext: Context) {
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.CONNECTING,
             bpm = 0,
-            isHrValid = false,
+            spo2 = 0,
+            isVitalsValid = false,
             statusMessage = "연결 끊김 — ${delayMs / 1000}초 후 재연결 시도..."
         )
         logMsg("${delayMs / 1000}초 후 BLE 자동 재연결 예정 (시도 #$reconnectAttempt)")
         reconnectJob = scope.launch {
             delay(delayMs)
-            if (!userInitiatedDisconnect && !authFailed && targetAddress.isNotEmpty()) {
+            if (!userInitiatedDisconnect && targetAddress.isNotEmpty()) {
                 openGattConnection()
             }
         }
     }
 
-    fun getLatestHeartRate(): HeartRateData {
+    fun getLatestVitals(): VitalsData {
         val state = _gatewayState.value
-        val isFresh = state.bpm > 0 &&
-            (System.currentTimeMillis() - state.lastHrUpdatedAt) < HR_FRESHNESS_TIMEOUT_MS
-        return HeartRateData(
-            bpm = if (isFresh) state.bpm else 0,
+        val isFresh = (state.bpm > 0 || state.spo2 > 0) &&
+            (System.currentTimeMillis() - state.lastUpdatedAt) < VITALS_FRESHNESS_TIMEOUT_MS
+        return VitalsData(
+            heartRate = if (isFresh) state.bpm else 0,
+            spo2 = if (isFresh) state.spo2 else 0,
             isValid = isFresh,
-            updatedAt = state.lastHrUpdatedAt,
+            updatedAt = state.lastUpdatedAt,
             source = state.deviceName.ifBlank { state.deviceAddress }
         )
     }

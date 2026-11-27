@@ -58,7 +58,6 @@ class SensorStreamingService : Service() {
         const val EXTRA_DEVICE_ID = "EXTRA_DEVICE_ID"
         const val EXTRA_MIBAND_ADDRESS = "EXTRA_MIBAND_ADDRESS"
         const val EXTRA_MIBAND_NAME = "EXTRA_MIBAND_NAME"
-        const val EXTRA_MIBAND_AUTH_KEY = "EXTRA_MIBAND_AUTH_KEY"
 
         private val _serviceStatus = MutableStateFlow(ServiceStatus())
         val serviceStatus: StateFlow<ServiceStatus> = _serviceStatus.asStateFlow()
@@ -132,14 +131,12 @@ class SensorStreamingService : Service() {
                 val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: ""
                 val miBandAddress = intent.getStringExtra(EXTRA_MIBAND_ADDRESS) ?: ""
                 val miBandName = intent.getStringExtra(EXTRA_MIBAND_NAME) ?: ""
-                val miBandAuthKey = intent.getStringExtra(EXTRA_MIBAND_AUTH_KEY) ?: ""
                 if (deviceId.isNotEmpty()) {
                     startStreamingService(
                         brokerUrl = brokerUrl,
                         deviceId = deviceId,
                         miBandAddress = miBandAddress,
-                        miBandName = miBandName,
-                        miBandAuthKey = miBandAuthKey
+                        miBandName = miBandName
                     )
                 }
             }
@@ -155,8 +152,7 @@ class SensorStreamingService : Service() {
         brokerUrl: String,
         deviceId: String,
         miBandAddress: String = "",
-        miBandName: String = "",
-        miBandAuthKey: String = ""
+        miBandName: String = ""
     ) {
         val notification = buildNotification("Initializing streaming service...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -183,10 +179,9 @@ class SensorStreamingService : Service() {
             val currentBle = miBandGateway.gatewayState.value
             val alreadyActiveForTarget = currentBle.deviceAddress == miBandAddress &&
                 (currentBle.status == BleConnectionStatus.CONNECTING ||
-                    currentBle.status == BleConnectionStatus.AUTHENTICATING ||
                     currentBle.status == BleConnectionStatus.CONNECTED_STREAMING)
             if (!alreadyActiveForTarget) {
-                miBandGateway.connect(miBandAddress, miBandName, miBandAuthKey)
+                miBandGateway.connect(miBandAddress, miBandName)
             }
             autoConnectedMiBand = true
         } else {
@@ -223,7 +218,7 @@ class SensorStreamingService : Service() {
                 val imu = sensorCollector.getLatestImu()
                 val barometer = sensorCollector.getLatestBarometer()
                 val gps = gpsCollector.getLatestGps()
-                val heartRate = miBandGateway.getLatestHeartRate()
+                val vitals = miBandGateway.getLatestVitals()
 
                 val payload = SensorPayload(
                     deviceId = deviceId,
@@ -231,7 +226,7 @@ class SensorStreamingService : Service() {
                     gps = gps,
                     imu = imu,
                     barometer = barometer,
-                    heartRate = heartRate
+                    vitals = vitals
                 )
 
                 val jsonPayload = payload.toJsonString()

@@ -1,5 +1,9 @@
 package com.example.location_producer.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,8 +17,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,7 +24,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -43,21 +44,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.widget.Toast
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.location_producer.ble.BleConnectionStatus
-import com.example.location_producer.ble.MiBandProtocol
 import com.example.location_producer.model.GpsData
-import com.example.location_producer.model.HeartRateData
 import com.example.location_producer.model.ImuData
+import com.example.location_producer.model.VitalsData
 import com.example.location_producer.mqtt.MqttConnectionStatus
 import java.util.Locale
 
@@ -76,14 +71,11 @@ fun MainScreen(
     val mqttState by viewModel.mqttState.collectAsState()
     val miBandAddress by viewModel.miBandAddress.collectAsState()
     val miBandName by viewModel.miBandName.collectAsState()
-    val miBandAuthKey by viewModel.miBandAuthKey.collectAsState()
     val miBandState by viewModel.miBandState.collectAsState()
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
 
-    val zeppEmail by viewModel.zeppEmail.collectAsState()
-    val zeppPassword by viewModel.zeppPassword.collectAsState()
-    val isFetchingZeppKey by viewModel.isFetchingZeppKey.collectAsState()
+    var showGuideBanner by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -228,7 +220,6 @@ fun MainScreen(
                         val (bleLabel, isBleActive) = when (miBandState.status) {
                             BleConnectionStatus.CONNECTED_STREAMING -> "BLE Streaming" to true
                             BleConnectionStatus.CONNECTING -> "BLE Connecting" to false
-                            BleConnectionStatus.AUTHENTICATING -> "Authenticating" to false
                             BleConnectionStatus.ERROR -> "BLE Error" to false
                             BleConnectionStatus.DISCONNECTED -> "BLE Disconnected" to false
                         }
@@ -238,7 +229,7 @@ fun MainScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Mi Band BLE Gateway (Heart Rate)",
+                                text = "Mi Band BLE Gateway (Vitals)",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -304,27 +295,22 @@ fun MainScreen(
                                 }
                             }
 
-                            val modeText = if (miBandAuthKey.isNotBlank()) {
-                                "Mode: Mi Band 6 Auth (AES-128 + 0x2A39)"
-                            } else {
-                                "Mode: Standard BLE HRS (0x180D / 0x2A37)"
-                            }
-                            Text(
-                                text = modeText,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-
-                            val bpmDisplay = if (miBandState.isHrValid && miBandState.bpm > 0) {
+                            val bpmDisplay = if (miBandState.isVitalsValid && miBandState.bpm > 0) {
                                 "${miBandState.bpm} BPM"
                             } else {
                                 "-- BPM"
                             }
+                            val spo2Display = if (miBandState.isVitalsValid && miBandState.spo2 > 0) {
+                                "${miBandState.spo2} %"
+                            } else {
+                                "-- %"
+                            }
+
                             Text(
-                                text = "Live Heart Rate: $bpmDisplay",
+                                text = "Live Vitals: $bpmDisplay · SpO2: $spo2Display",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = if (miBandState.isHrValid) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
+                                color = if (miBandState.isVitalsValid) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
                             )
 
                             miBandState.statusMessage?.let { msg ->
@@ -432,102 +418,52 @@ fun MainScreen(
                             }
                         }
 
-                        // Auth Key Input
-                        val isAuthKeyValid = MiBandProtocol.isValidAuthKeyInput(miBandAuthKey)
-                        OutlinedTextField(
-                            value = miBandAuthKey,
-                            onValueChange = { viewModel.updateMiBandAuthKey(it) },
-                            label = { Text("Auth Key (32-hex, optional)") },
-                            placeholder = { Text("예: 0x0123456789abcdef0123456789abcdef") },
-                            isError = !isAuthKeyValid,
-                            supportingText = {
-                                if (!isAuthKeyValid) {
-                                    Text(
-                                        text = "32자리 16진수(선택적 0x 접두사) 또는 빈 값이어야 합니다.",
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                } else {
-                                    Text("입력 시 Mi Band 6 AES 인증 후 연속 측정 / 비워두면 표준 BLE(0x180D) 구독")
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !serviceStatus.isRunning,
-                            singleLine = true
-                        )
-
-                        // Zepp Cloud Auto-Fetch Section
-                        var showZeppLogin by remember { mutableStateOf(false) }
+                        // Guide Banner Toggle Button
                         TextButton(
-                            onClick = { showZeppLogin = !showZeppLogin },
+                            onClick = { showGuideBanner = !showGuideBanner },
                             modifier = Modifier.align(Alignment.End)
                         ) {
-                            Text(if (showZeppLogin) "▲ Hide Zepp Login" else "▼ Zepp 계정으로 Auth Key 자동 가져오기")
+                            Text(if (showGuideBanner) "▲ 가이드 닫기" else "❓ Mi Band 설정 & 초단위 라이브 수신 가이드")
                         }
 
-                        if (showZeppLogin) {
+                        if (showGuideBanner) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(
-                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        MaterialTheme.colorScheme.secondaryContainer,
                                         RoundedCornerShape(8.dp)
                                     )
                                     .padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
-                                    text = "Zepp (Huami) Cloud Auth Key Fetcher",
+                                    text = "💡 Mi Band 초단위 실시간 연결 설정 가이드",
                                     style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
                                 Text(
-                                    text = "Zepp 계정 정보로 로그인하여 서버에 등록된 최신 Mi Band Auth Key를 즉시 자동으로 불러옵니다.",
-                                    style = MaterialTheme.typography.bodySmall
+                                    text = "1. Zepp Life 앱 ➔ [프로필] ➔ [Mi Smart Band 6] ➔ [활동 심박수 공유] 옵션을 켜기(ON) 해주세요.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
-
-                                OutlinedTextField(
-                                    value = zeppEmail,
-                                    onValueChange = { viewModel.updateZeppEmail(it) },
-                                    label = { Text("Zepp Email / ID") },
-                                    placeholder = { Text("예: user@gmail.com") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isFetchingZeppKey && !serviceStatus.isRunning,
-                                    singleLine = true
+                                Text(
+                                    text = "2. 저희 앱에서 기기를 선택 후 [Connect Mi Band]를 누릅니다.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
-
-                                OutlinedTextField(
-                                    value = zeppPassword,
-                                    onValueChange = { viewModel.updateZeppPassword(it) },
-                                    label = { Text("Zepp Password") },
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isFetchingZeppKey && !serviceStatus.isRunning,
-                                    singleLine = true
+                                Text(
+                                    text = "3. 초단위 실시간 심박수 수신: Mi Band 화면 ➔ [운동(Workout)] ➔ [자유 훈련(Free training)]을 실행하면 1초 간격으로 실시간 심박수가 무제한 송신됩니다!",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
-
-                                Button(
-                                    onClick = { viewModel.fetchAuthKeyFromZepp() },
-                                    enabled = !isFetchingZeppKey && zeppEmail.isNotBlank() && zeppPassword.isNotBlank() && !serviceStatus.isRunning,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    if (isFetchingZeppKey) {
-                                        CircularProgressIndicator(
-                                            color = MaterialTheme.colorScheme.onPrimary,
-                                            modifier = Modifier.size(20.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Zepp 서버에서 최신 Key 받는 중...")
-                                    } else {
-                                        Text("Fetch Auth Key from Zepp Cloud")
-                                    }
-                                }
                             }
                         }
 
                         // Connect / Disconnect button
                         val isBleBusyOrConnected = miBandState.status == BleConnectionStatus.CONNECTING ||
-                            miBandState.status == BleConnectionStatus.AUTHENTICATING ||
                             miBandState.status == BleConnectionStatus.CONNECTED_STREAMING
 
                         if (isBleBusyOrConnected) {
@@ -538,24 +474,12 @@ fun MainScreen(
                                 Text("Disconnect Mi Band")
                             }
                         } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Button(
+                                onClick = { viewModel.connectMiBand() },
+                                enabled = hasBluetoothPermission && miBandAddress.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Button(
-                                    onClick = { viewModel.connectMiBand() },
-                                    enabled = hasBluetoothPermission && miBandAddress.isNotBlank() && isAuthKeyValid,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Connect")
-                                }
-                                OutlinedButton(
-                                    onClick = { viewModel.pairMiBand() },
-                                    enabled = hasBluetoothPermission && miBandAddress.isNotBlank() && isAuthKeyValid,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Pair/Bind (0x01)")
-                                }
+                                Text("Connect Mi Band")
                             }
                         }
                     }
@@ -655,7 +579,7 @@ fun MainScreen(
                         val gps = payload?.gps ?: GpsData()
                         val imu = payload?.imu ?: ImuData()
                         val baro = payload?.barometer?.pressure ?: 0.0f
-                        val heartRate = payload?.heartRate ?: HeartRateData()
+                        val vitals = payload?.vitals ?: VitalsData()
 
                         // GPS Section
                         Column(
@@ -754,7 +678,7 @@ fun MainScreen(
                             )
                         }
 
-                        // Heart Rate Section
+                        // Vitals Section (Heart Rate & SpO2)
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -769,27 +693,28 @@ fun MainScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = "Heart Rate (Mi Band BLE)",
+                                    text = "Vitals (Mi Band BLE)",
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Text(
-                                    text = if (heartRate.isValid) "VALID HR" else "NO SIGNAL / INVALID",
-                                    color = if (heartRate.isValid) Color(0xFF2E7D32) else Color.Red,
+                                    text = if (vitals.isValid) "VALID VITALS" else "NO SIGNAL / INVALID",
+                                    color = if (vitals.isValid) Color(0xFF2E7D32) else Color.Red,
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
-                            val hrBpmText = if (heartRate.isValid && heartRate.bpm > 0) "${heartRate.bpm} BPM" else "-- BPM"
+                            val hrBpmText = if (vitals.isValid && vitals.heartRate > 0) "${vitals.heartRate} BPM" else "-- BPM"
+                            val spo2Text = if (vitals.isValid && vitals.spo2 > 0) "${vitals.spo2} %" else "-- %"
                             Text(
-                                text = "Rate: $hrBpmText",
+                                text = "Heart Rate: $hrBpmText · SpO2: $spo2Text",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                            val sourceText = heartRate.source.ifBlank { "Not connected" }
+                            val sourceText = vitals.source.ifBlank { "Not connected" }
                             Text(
                                 text = "Source: $sourceText",
                                 fontFamily = FontFamily.Monospace,

@@ -62,14 +62,16 @@ data class BarometerData(
     }
 }
 
-data class HeartRateData(
-    val bpm: Int = 0,
+data class VitalsData(
+    val heartRate: Int = 0,
+    val spo2: Int = 0,
     val isValid: Boolean = false,
     val updatedAt: Long = 0L,
     val source: String = ""
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
-        put("bpm", bpm)
+        put("heart_rate", heartRate)
+        put("spo2", spo2)
         put("is_valid", isValid)
         put("updated_at", updatedAt)
         put("source", source)
@@ -82,7 +84,7 @@ data class SensorPayload(
     val gps: GpsData = GpsData(),
     val imu: ImuData = ImuData(),
     val barometer: BarometerData = BarometerData(),
-    val heartRate: HeartRateData = HeartRateData()
+    val vitals: VitalsData = VitalsData()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("device_id", deviceId)
@@ -90,7 +92,8 @@ data class SensorPayload(
         put("gps", gps.toJson())
         put("imu", imu.toJson())
         put("barometer", barometer.toJson())
-        put("heart_rate", heartRate.toJson())
+        put("vitals", vitals.toJson())
+        put("heart_rate", vitals.toJson())
     }
 
     fun toJsonString(): String = toJson().toString()

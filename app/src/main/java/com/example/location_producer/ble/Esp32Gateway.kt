@@ -33,10 +33,20 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+data class Esp32PacketEntry(
+    val charUuid: String,
+    val text: String,
+    val hex: String,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
 data class Esp32GatewayState(
     val status: BleConnectionStatus = BleConnectionStatus.DISCONNECTED,
     val deviceName: String = "",
     val deviceAddress: String = "",
+    val isPaused: Boolean = false,
+    val selectedCharUuid: String = "ALL",
+    val packetsByChar: Map<String, Esp32PacketEntry> = emptyMap(),
     val lastRawHex: String = "",
     val lastRawText: String = "",
     val imu: ImuData = ImuData(),
@@ -93,6 +103,8 @@ class Esp32Gateway private constructor(private val appContext: Context) {
     private var targetAddress: String = ""
     private var targetName: String = ""
 
+    private val loggedUuids = mutableSetOf<String>()
+
     fun hasBluetoothConnectPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
@@ -107,6 +119,16 @@ class Esp32Gateway private constructor(private val appContext: Context) {
     private fun logMsg(message: String) {
         Log.d(TAG, message)
         onLog?.invoke(message)
+    }
+
+    fun togglePauseSniffer() {
+        val next = !_gatewayState.value.isPaused
+        _gatewayState.value = _gatewayState.value.copy(isPaused = next)
+        logMsg(if (next) "ESP32 스니퍼 일시정지 (화면 고정)" else "ESP32 스니퍼 감지 재개")
+    }
+
+    fun selectCharUuid(charUuid: String) {
+        _gatewayState.value = _gatewayState.value.copy(selectedCharUuid = charUuid)
     }
 
     fun connect(address: String, name: String = "") {
@@ -142,6 +164,7 @@ class Esp32Gateway private constructor(private val appContext: Context) {
 
         reconnectJob?.cancel()
         cleanupGatt()
+        loggedUuids.clear()
 
         targetAddress = cleanAddress
         targetName = name.ifBlank { cleanAddress }
@@ -382,7 +405,7 @@ class Esp32Gateway private constructor(private val appContext: Context) {
 
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.CONNECTED_STREAMING,
-            statusMessage = "ESP32 패킷 수신 및 스니핑 중 (채널 $subscribedCount 개)"
+            statusMessage = "ESP32 패킷 스니퍼 작동 중 (채널 $subscribedCount 개)"
         )
     }
 
@@ -396,7 +419,9 @@ class Esp32Gateway private constructor(private val appContext: Context) {
         val hexStr = bytesToHex(value)
         val textStr = String(value, Charsets.UTF_8).filter { it >= ' ' || it == '\n' || it == '\r' }.trim()
 
-        logMsg("[ESP32 Sniffer 0x$shortUuid] Text: '$textStr' | Hex: $hexStr")
+        if (loggedUuids.add(shortUuid)) {
+            logMsg("📡 [ESP32 Sniffer 0x$shortUuid 최초 감지] Text: '$textStr' | Hex: $hexStr")
+        }
 
         var parsedImu: ImuData? = null
         var parsedBaro: BarometerData? = null
@@ -467,16 +492,35 @@ class Esp32Gateway private constructor(private val appContext: Context) {
             }
         }
 
-        _gatewayState.value = _gatewayState.value.copy(
-            status = BleConnectionStatus.CONNECTED_STREAMING,
-            lastRawHex = hexStr,
-            lastRawText = textStr,
-            imu = parsedImu ?: _gatewayState.value.imu,
-            barometer = parsedBaro ?: _gatewayState.value.barometer,
-            isDataValid = true,
-            lastUpdatedAt = now,
-            statusMessage = "ESP32 패킷 수신 중 (0x$shortUuid)"
+        val currentState = _gatewayState.value
+        val updatedMap = currentState.packetsByChar.toMutableMap()
+        updatedMap[shortUuid] = Esp32PacketEntry(
+            charUuid = shortUuid,
+            text = textStr,
+            hex = hexStr,
+            updatedAt = now
         )
+
+        if (!currentState.isPaused) {
+            _gatewayState.value = currentState.copy(
+                packetsByChar = updatedMap,
+                lastRawHex = hexStr,
+                lastRawText = textStr,
+                imu = parsedImu ?: currentState.imu,
+                barometer = parsedBaro ?: currentState.barometer,
+                isDataValid = true,
+                lastUpdatedAt = now,
+                statusMessage = "ESP32 패킷 수신 중 (채널 0x$shortUuid)"
+            )
+        } else {
+            _gatewayState.value = currentState.copy(
+                packetsByChar = updatedMap,
+                imu = parsedImu ?: currentState.imu,
+                barometer = parsedBaro ?: currentState.barometer,
+                isDataValid = true,
+                lastUpdatedAt = now
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")

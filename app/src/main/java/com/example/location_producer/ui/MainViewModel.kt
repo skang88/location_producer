@@ -139,6 +139,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         esp32Gateway.disconnect()
     }
 
+    fun togglePauseSniffer() {
+        esp32Gateway.togglePauseSniffer()
+    }
+
+    fun selectCharUuid(charUuid: String) {
+        esp32Gateway.selectCharUuid(charUuid)
+    }
+
     fun clearLogs() {
         SensorStreamingService.clearLogs()
     }

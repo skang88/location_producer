@@ -572,36 +572,89 @@ fun MainScreen(
                         }
 
                         // Live Packet Sniffer Inspection Box
-                        if (esp32State.lastRawText.isNotEmpty() || esp32State.lastRawHex.isNotEmpty()) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
-                                    .padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                        val context = LocalContext.current
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "📡 ESP32 BLE Packet Sniffer (Live Inspection)",
-                                    color = Color.Yellow,
+                                    text = if (esp32State.isPaused) "⏸️ Sniffer FROZEN" else "📡 ESP32 BLE Packet Sniffer",
+                                    color = if (esp32State.isPaused) Color.Red else Color.Yellow,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp
                                 )
-                                if (esp32State.lastRawText.isNotEmpty()) {
-                                    Text(
-                                        text = "Text: ${esp32State.lastRawText}",
-                                        color = Color.Green,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp
-                                    )
+
+                                Row {
+                                    TextButton(onClick = { viewModel.togglePauseSniffer() }) {
+                                        Text(
+                                            text = if (esp32State.isPaused) "▶ Resume" else "⏸️ Freeze",
+                                            color = if (esp32State.isPaused) Color.Green else Color.Yellow,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    TextButton(onClick = {
+                                        val displayStr = "Text: ${esp32State.lastRawText}\nHex: ${esp32State.lastRawHex}"
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clip = ClipData.newPlainText("ESP32 Packet", displayStr)
+                                        clipboard.setPrimaryClip(clip)
+                                        Toast.makeText(context, "ESP32 수신 데이터가 클립보드에 복사되었습니다!", Toast.LENGTH_SHORT).show()
+                                    }) {
+                                        Text("Copy Data", fontSize = 11.sp)
+                                    }
                                 }
-                                if (esp32State.lastRawHex.isNotEmpty()) {
-                                    Text(
-                                        text = "Hex : ${esp32State.lastRawHex}",
-                                        color = Color.Cyan,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp
+                            }
+
+                            // Characteristic Filter Chips
+                            if (esp32State.packetsByChar.isNotEmpty()) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    FilterChip(
+                                        selected = esp32State.selectedCharUuid == "ALL",
+                                        onClick = { viewModel.selectCharUuid("ALL") },
+                                        label = { Text("ALL", fontSize = 10.sp) }
                                     )
+                                    esp32State.packetsByChar.keys.take(4).forEach { charUuid ->
+                                        FilterChip(
+                                            selected = esp32State.selectedCharUuid == charUuid,
+                                            onClick = { viewModel.selectCharUuid(charUuid) },
+                                            label = { Text("0x$charUuid", fontSize = 10.sp) }
+                                        )
+                                    }
                                 }
+                            }
+
+                            val filteredEntry = if (esp32State.selectedCharUuid != "ALL") {
+                                esp32State.packetsByChar[esp32State.selectedCharUuid]
+                            } else null
+
+                            val textToShow = filteredEntry?.text ?: esp32State.lastRawText
+                            val hexToShow = filteredEntry?.hex ?: esp32State.lastRawHex
+
+                            if (textToShow.isNotEmpty()) {
+                                Text(
+                                    text = "Text: $textToShow",
+                                    color = Color.Green,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            if (hexToShow.isNotEmpty()) {
+                                Text(
+                                    text = "Hex : $hexToShow",
+                                    color = Color.Cyan,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp
+                                )
                             }
                         }
 

@@ -73,8 +73,8 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
     companion object {
         private const val TAG = "MiBandGateway"
-        private const val GATT_OP_TIMEOUT_MS = 5_000L
-        private const val AUTH_ATTEMPT_TIMEOUT_MS = 6_000L
+        private const val GATT_OP_TIMEOUT_MS = 2_000L
+        private const val AUTH_ATTEMPT_TIMEOUT_MS = 10_000L
         private const val HR_PING_INTERVAL_MS = 12_000L
         private const val HR_FRESHNESS_TIMEOUT_MS = 15_000L
         private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 10_000L)
@@ -898,8 +898,16 @@ class MiBandGateway private constructor(private val appContext: Context) {
         gatt.setCharacteristicNotification(characteristic, true)
         val cccd = characteristic.getDescriptor(MiBandProtocol.DESCRIPTOR_CCCD)
         if (cccd != null) {
+            val props = characteristic.properties
+            val valToSet = if ((props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0 &&
+                (props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) == 0
+            ) {
+                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+            } else {
+                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            }
             enqueueGattOperation {
-                writeDescriptorRaw(gatt, cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                writeDescriptorRaw(gatt, cccd, valToSet)
             }
         }
     }
@@ -912,6 +920,8 @@ class MiBandGateway private constructor(private val appContext: Context) {
         value: ByteArray
     ): Boolean {
         if (!hasBluetoothConnectPermission()) return false
+        characteristic.value = value
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             gatt.writeCharacteristic(
                 characteristic,
@@ -919,8 +929,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
                 BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             ) == BluetoothStatusCodes.SUCCESS
         } else {
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            characteristic.value = value
             gatt.writeCharacteristic(characteristic)
         }
     }
@@ -933,10 +941,10 @@ class MiBandGateway private constructor(private val appContext: Context) {
         value: ByteArray
     ): Boolean {
         if (!hasBluetoothConnectPermission()) return false
+        descriptor.value = value
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS
         } else {
-            descriptor.value = value
             gatt.writeDescriptor(descriptor)
         }
     }

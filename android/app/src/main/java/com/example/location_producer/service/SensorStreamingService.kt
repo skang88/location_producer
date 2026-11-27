@@ -258,7 +258,11 @@ class SensorStreamingService : Service() {
                 val esp32Imu = esp32Gateway.getLatestImu()
                 val esp32Baro = esp32Gateway.getLatestBarometer()
 
-                val imu = esp32Imu ?: phoneImu
+                val imu = if (esp32Imu != null) {
+                    if (esp32Imu.hasYaw) esp32Imu else esp32Imu.copy(yaw = phoneImu.yaw, hasYaw = true)
+                } else {
+                    phoneImu
+                }
                 val barometer = esp32Baro ?: phoneBaro
                 val gps = gpsCollector.getLatestGps()
                 val vitals = miBandGateway.getLatestVitals()

@@ -458,12 +458,15 @@ class Esp32Gateway private constructor(private val appContext: Context) {
                     val gy = (gyroObj?.optDouble("y") ?: imuObj.optDouble("gy", 0.0)).toFloat()
                     val gz = (gyroObj?.optDouble("z") ?: imuObj.optDouble("gz", 0.0)).toFloat()
 
-                    val yaw = imuObj.optDouble("yaw", json.optDouble("yaw", 0.0))
+                    val hasYawKey = imuObj.has("yaw") && !imuObj.isNull("yaw")
+                    val yaw = if (hasYawKey) imuObj.optDouble("yaw", 0.0) else if (json.has("yaw") && !json.isNull("yaw")) json.optDouble("yaw", 0.0) else 0.0
+                    val hasYaw = hasYawKey || (json.has("yaw") && !json.isNull("yaw"))
 
                     parsedImu = ImuData(
                         accel = AccelData(ax, ay, az),
                         gyro = GyroData(gx, gy, gz),
-                        yaw = yaw
+                        yaw = yaw,
+                        hasYaw = hasYaw
                     )
                 }
                 if (json.has("barometer") || json.has("pressure") || json.has("press")) {

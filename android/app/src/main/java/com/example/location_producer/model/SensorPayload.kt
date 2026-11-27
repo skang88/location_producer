@@ -45,7 +45,8 @@ data class GyroData(
 data class ImuData(
     val accel: AccelData = AccelData(),
     val gyro: GyroData = GyroData(),
-    val yaw: Double = 0.0
+    val yaw: Double = 0.0,
+    val hasYaw: Boolean = true
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("accel", accel.toJson())

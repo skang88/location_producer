@@ -53,6 +53,14 @@ class RescuerTracker:
         self.is_stationary = True
         self.stationary_variance_threshold = 0.15 # m/s^2
 
+        # Latest Mi Band / BLE Vitals
+        self.vitals = {
+            "heart_rate": 0,
+            "is_valid": False,
+            "updated_at": 0,
+            "source": ""
+        }
+
     def update_gps(self, gps_data: dict, timestamp: float):
         """Process incoming GPS data"""
         is_valid = gps_data.get("is_valid", False)
@@ -103,6 +111,28 @@ class RescuerTracker:
             self.floor_tracker.set_anchor_pressure(pressure)
         else:
             self.floor_tracker.update_barometer(pressure, timestamp)
+
+    def update_vitals(self, vitals_data: Any, timestamp: float):
+        """Process Mi Band / BLE vitals (heart_rate) data"""
+        if isinstance(vitals_data, dict):
+            hr = int(vitals_data.get("heart_rate", 0) or 0)
+            is_valid = bool(vitals_data.get("is_valid", hr > 0)) and hr > 0
+            updated_at = int(vitals_data.get("updated_at") or timestamp)
+            source = str(vitals_data.get("source") or "")
+        elif isinstance(vitals_data, (int, float)):
+            hr = int(vitals_data)
+            is_valid = hr > 0
+            updated_at = int(timestamp)
+            source = self.vitals.get("source", "")
+        else:
+            return
+
+        self.vitals = {
+            "heart_rate": hr if is_valid else 0,
+            "is_valid": is_valid,
+            "updated_at": updated_at,
+            "source": source
+        }
 
     def calibrate_position(
         self,
@@ -250,7 +280,8 @@ class RescuerTracker:
                 "is_stationary": self.is_stationary,
                 "turn_state": heading_info["turn_state"],
                 "is_grid_snapped": heading_info["is_grid_snapped"],
-                "magnetic_anomaly": heading_info["magnetic_anomaly_active"]
+                "magnetic_anomaly": heading_info["magnetic_anomaly_active"],
+                "vitals": dict(self.vitals)
             }
 
         # Global Coordinate Conversion:
@@ -284,5 +315,6 @@ class RescuerTracker:
             "turn_state": heading_info["turn_state"],
             "is_grid_snapped": heading_info["is_grid_snapped"],
             "magnetic_anomaly": heading_info["magnetic_anomaly_active"],
-            "is_manual_calibrated": self.is_manual_calibrated
+            "is_manual_calibrated": self.is_manual_calibrated,
+            "vitals": dict(self.vitals)
         }

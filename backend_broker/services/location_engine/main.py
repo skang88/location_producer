@@ -125,12 +125,17 @@ def main():
                 tracker.update_gps(data["gps"], timestamp)
 
             # 2. Update Barometer (Altitude & Floor)
-            if "barometer" in data:
+            if "barometer" in data and isinstance(data["barometer"], dict):
                 tracker.update_barometer(data["barometer"], timestamp)
 
-            # 3. Update IMU
+            # 3. Update Vitals (Mi Band / BLE Heart Rate)
+            vitals_data = data.get("vitals") or data.get("heart_rate")
+            if vitals_data is not None:
+                tracker.update_vitals(vitals_data, timestamp)
+
+            # 4. Update IMU
             step_info = None
-            if "imu" in data:
+            if "imu" in data and isinstance(data["imu"], dict):
                 step_info = tracker.update_imu(data["imu"], timestamp)
 
             # 4. Publish computed estimate periodically or on step
@@ -148,11 +153,13 @@ def main():
                 log_tag = "👟 STEP!" if is_step else "📍 UPDATE"
                 snap_tag = " [GRID_SNAP]" if estimate.get('is_grid_snapped') else ""
                 v_status = estimate.get('vertical_status', 'LEVEL')
+                vitals = estimate.get('vitals') or {}
+                hr_tag = f" | HR: {vitals['heart_rate']}bpm" if vitals.get('is_valid') else ""
                 logger.info(
                     f"{log_tag} [{device_id}] Mode: {estimate['mode']} | "
                     f"Pos: ({estimate['rel_x']}m, {estimate['rel_y']}m, Z:{estimate.get('rel_z', 0)}m | {estimate.get('floor_str', '1F')} {v_status}) | "
                     f"Heading: {estimate.get('heading_deg')}° ({estimate.get('turn_state', 'STRAIGHT')}{snap_tag}) | "
-                    f"Steps: {estimate['steps']} ({estimate['distance']}m)"
+                    f"Steps: {estimate['steps']} ({estimate['distance']}m){hr_tag}"
                 )
 
         except Exception as e:

@@ -53,9 +53,49 @@ def on_connect(client, userdata, flags, rc, properties=None):
     else:
         logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
 
+def normalize_sensor_payload(payload: dict, device_id: str) -> dict:
+    """Normalize incoming Android/ESP32/MiBand MQTT sensor payloads."""
+    if not payload.get("timestamp"):
+        payload["timestamp"] = int(time.time() * 1000)
+
+    # Normalize vitals / heart_rate from Mi Band or compatible wearable payloads
+    raw_vitals = payload.get("vitals")
+    raw_hr = payload.get("heart_rate")
+    if isinstance(raw_vitals, dict):
+        hr_val = int(raw_vitals.get("heart_rate", 0) or 0)
+        payload["vitals"] = {
+            "heart_rate": hr_val,
+            "is_valid": bool(raw_vitals.get("is_valid", hr_val > 0)) and hr_val > 0,
+            "updated_at": int(raw_vitals.get("updated_at") or payload["timestamp"]),
+            "source": str(raw_vitals.get("source") or "")
+        }
+    elif isinstance(raw_hr, dict):
+        hr_val = int(raw_hr.get("heart_rate", 0) or 0)
+        payload["vitals"] = {
+            "heart_rate": hr_val,
+            "is_valid": bool(raw_hr.get("is_valid", hr_val > 0)) and hr_val > 0,
+            "updated_at": int(raw_hr.get("updated_at") or payload["timestamp"]),
+            "source": str(raw_hr.get("source") or "")
+        }
+    elif isinstance(raw_hr, (int, float)):
+        hr_val = int(raw_hr)
+        payload["vitals"] = {
+            "heart_rate": hr_val,
+            "is_valid": hr_val > 0,
+            "updated_at": payload["timestamp"],
+            "source": "ble"
+        }
+
+    return payload
+
+
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
+        if not isinstance(payload, dict):
+            logger.warning(f"Ignored non-object JSON payload on topic {msg.topic}")
+            return
+
         device_id = payload.get("device_id")
         
         # Fallback to topic name if device_id not in json (e.g., sensors/{device_id}/data)
@@ -72,6 +112,7 @@ def on_message(client, userdata, msg):
             producer.send(KAFKA_STATUS_TOPIC, key=device_id, value=payload)
             logger.info(f"Status message forwarded [{device_id}]: {payload.get('status')} (reason={payload.get('reason')}, retained={msg.retain})")
         else:
+            payload = normalize_sensor_payload(payload, device_id)
             # Publish to Kafka partitioned by device_id to preserve time-series order
             future = producer.send(KAFKA_TOPIC, key=device_id, value=payload)
         

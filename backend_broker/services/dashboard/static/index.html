@@ -189,8 +189,9 @@
           <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
             <div id="accelNormBar" class="bg-cyan-500 h-full w-0 transition-all duration-75"></div>
           </div>
-          <div class="grid grid-cols-3 gap-1 pt-1 text-[11px] font-mono text-gray-400">
+          <div class="grid grid-cols-2 gap-1.5 pt-1 text-[11px] font-mono text-gray-400">
             <div>방위: <span id="yawVal" class="text-white">0°</span></div>
+            <div>심박: <span id="hrVal" class="text-rose-400 font-bold">-- BPM</span></div>
             <div>기압: <span id="baroVal" class="text-cyan-300">0 hPa</span></div>
             <div>고도: <span id="relZVal" class="text-emerald-400 font-bold">+0.0m</span></div>
           </div>
@@ -974,6 +975,11 @@
         const isTurning = r.turn_state === 'TURNING';
         const isMagneticAnomaly = r.magnetic_anomaly;
         const isManualCalibrated = !!r.is_manual_calibrated;
+        const vitals = r.vitals || {};
+        const hasValidHr = vitals.is_valid && vitals.heart_rate > 0;
+        const hrBpm = hasValidHr ? vitals.heart_rate : null;
+        const isHrAlert = hasValidHr && (hrBpm >= 150 || hrBpm <= 45);
+        const hrSource = vitals.source ? ` (${vitals.source})` : '';
 
         return `
           <div onclick="toggleFocusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
@@ -1044,6 +1050,12 @@
               <div>
                 <span class="text-gray-400">상대고도:</span> <span class="font-mono text-emerald-400 font-bold">${relZ}</span>
               </div>
+              <div class="col-span-2 flex items-center justify-between bg-gray-900/70 border ${isHrAlert ? 'border-rose-500/80 bg-rose-950/40' : 'border-gray-700/60'} rounded px-2 py-1">
+                <span class="text-gray-400">심박수${hrSource}:</span>
+                <span class="font-mono font-bold ${hasValidHr ? (isHrAlert ? 'text-rose-400 animate-pulse' : 'text-rose-300') : 'text-gray-500'}">
+                  ${hasValidHr ? `❤️ ${hrBpm} BPM` : '🤍 -- BPM'}
+                </span>
+              </div>
             </div>
 
             <!-- Algorithm Stabilization Tags -->
@@ -1102,6 +1114,14 @@
       if (data.barometer && data.barometer.pressure) {
         document.getElementById('baroVal').innerText = data.barometer.pressure + ' hPa';
       }
+      const rawVitals = data.vitals || data.heart_rate;
+      const hrEl = document.getElementById('hrVal');
+      if (hrEl && rawVitals && typeof rawVitals === 'object') {
+        const bpm = rawVitals.heart_rate || 0;
+        const valid = rawVitals.is_valid && bpm > 0;
+        hrEl.innerText = valid ? `${bpm} BPM` : '-- BPM';
+        hrEl.className = valid ? 'text-rose-400 font-bold' : 'text-gray-500';
+      }
 
       const r = rescuers[data.device_id];
       if (r && r.rel_z !== undefined) {
@@ -1111,6 +1131,7 @@
       const container = document.getElementById('sensorLogContainer');
       const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString();
       const gpsState = data.gps ? (data.gps.is_valid ? 'GPS_OK' : 'GPS_LOST') : 'NO_GPS';
+      const hrStr = (rawVitals && rawVitals.is_valid && rawVitals.heart_rate > 0) ? ` | ❤️ ${rawVitals.heart_rate}bpm` : '';
       
       const logLine = document.createElement('div');
       logLine.className = 'border-b border-gray-900 pb-1';
@@ -1118,7 +1139,7 @@
         <span class="text-gray-500">[${timeStr}]</span> 
         <span class="text-cyan-400 font-semibold">${data.device_id}</span> 
         <span class="${data.gps && data.gps.is_valid ? 'text-emerald-400' : 'text-amber-400'}">[${gpsState}]</span>
-        <div class="text-gray-400 truncate">P: ${data.barometer?.pressure || 0}hPa | a: (${data.imu?.accel?.x}, ${data.imu?.accel?.y}, ${data.imu?.accel?.z})</div>
+        <div class="text-gray-400 truncate">P: ${data.barometer?.pressure || 0}hPa | a: (${data.imu?.accel?.x}, ${data.imu?.accel?.y}, ${data.imu?.accel?.z})${hrStr}</div>
       `;
 
       container.prepend(logLine);

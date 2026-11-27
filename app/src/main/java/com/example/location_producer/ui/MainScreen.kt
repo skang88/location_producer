@@ -45,6 +45,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -797,6 +802,7 @@ fun MainScreen(
 
             // Operational Logs Card
             item {
+                val context = LocalContext.current
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -806,21 +812,42 @@ fun MainScreen(
                             .fillMaxWidth()
                             .padding(16.dp)
                     ) {
-                        Text(
-                            text = "Operation Logs",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Operation Logs",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            TextButton(
+                                onClick = {
+                                    val logsText = serviceStatus.logs.joinToString("\n")
+                                    if (logsText.isNotBlank()) {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clip = ClipData.newPlainText("Operation Logs", logsText)
+                                        clipboard.setPrimaryClip(clip)
+                                        Toast.makeText(context, "로그가 클립보드에 복사되었습니다!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "복사할 로그가 없습니다.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Text("Copy Logs")
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(120.dp)
+                                .height(160.dp)
                                 .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
                                 .padding(8.dp)
                         ) {
                             LazyColumn {
-                                items(serviceStatus.logs.takeLast(20)) { logLine ->
+                                items(serviceStatus.logs) { logLine ->
                                     Text(
                                         text = logLine,
                                         color = Color.Green,

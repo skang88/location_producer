@@ -80,10 +80,9 @@ class MiBandGateway private constructor(private val appContext: Context) {
         private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 10_000L)
 
         private val AUTH_ATTEMPTS = listOf(
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_LEGACY, useCryptFlag = false, includeProtocolVersion = false),
             AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = false),
-            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = true, includeProtocolVersion = false),
-            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = true),
-            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_LEGACY, useCryptFlag = false, includeProtocolVersion = false)
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = true, includeProtocolVersion = false)
         )
 
         @Volatile
@@ -148,7 +147,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
     private var challengeReceived = false
 
     private var lastChallenge16: ByteArray? = null
-    private var triedFallbackResp = false
+    private var fallbackIndex = 0
 
     fun hasBluetoothConnectPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -668,7 +667,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
         activeUseCryptFlag = false
         challengeReceived = false
         lastChallenge16 = null
-        triedFallbackResp = false
+        fallbackIndex = 0
 
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.AUTHENTICATING,
@@ -765,7 +764,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
             }
             is MiBandProtocol.AuthNotification.Challenge -> {
                 challengeReceived = true
-                triedFallbackResp = false
+                fallbackIndex = 0
                 authJob?.cancel()
                 val key = activeAuthKeyBytes ?: return
                 lastChallenge16 = parsed.random16
@@ -778,7 +777,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
                     authFlag = currentAuthFlag,
                     useCryptFlag = useCrypt
                 )
-                logMsg("Auth TX (resp): ${MiBandProtocol.bytesToHex(response)}")
+                logMsg("Auth TX (resp #0): ${MiBandProtocol.bytesToHex(response)}")
                 enqueueGattOperation {
                     writeCharacteristicRaw(gatt, authChar, response)
                 }
@@ -795,17 +794,23 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
                 val challenge = lastChallenge16
                 val key = activeAuthKeyBytes
-                if (!triedFallbackResp && key != null && challenge != null) {
-                    triedFallbackResp = true
-                    val fallbackCrypt = !activeUseCryptFlag
-                    val fallbackFlag = if (currentAuthFlag == MiBandProtocol.AUTH_FLAG_DEFAULT) MiBandProtocol.AUTH_FLAG_LEGACY else MiBandProtocol.AUTH_FLAG_DEFAULT
-                    logMsg("AES 응답 거부(cmd=0x$cmdHex, status=0x$statusHex) — 대체 플래그(cmd=${if (fallbackCrypt) "0x83" else "0x03"}, flag=0x${String.format("%02X", fallbackFlag)})로 재시도")
+                if (fallbackIndex < 3 && key != null && challenge != null) {
+                    fallbackIndex++
+                    val (fallbackFlag, fallbackCrypt) = when (fallbackIndex) {
+                        1 -> Pair(MiBandProtocol.AUTH_FLAG_LEGACY, false)    // 0x03 0x08
+                        2 -> Pair(MiBandProtocol.AUTH_FLAG_DEFAULT, true)   // 0x83 0x00
+                        else -> Pair(MiBandProtocol.AUTH_FLAG_LEGACY, true) // 0x83 0x08
+                    }
+                    val cmdLabel = if (fallbackCrypt) "0x83" else "0x03"
+                    val flagLabel = String.format("%02X", fallbackFlag)
+                    logMsg("AES 응답 거부(status=0x$statusHex) — 재시도 #$fallbackIndex (cmd=$cmdLabel, flag=0x$flagLabel)")
                     val response = MiBandProtocol.buildEncryptedAuthResponse(
                         authKey16 = key,
                         random16 = challenge,
                         authFlag = fallbackFlag,
                         useCryptFlag = fallbackCrypt
                     )
+                    logMsg("Auth TX (resp #$fallbackIndex): ${MiBandProtocol.bytesToHex(response)}")
                     enqueueGattOperation {
                         writeCharacteristicRaw(gatt, authChar, response)
                     }

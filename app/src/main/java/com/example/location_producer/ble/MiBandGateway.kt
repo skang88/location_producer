@@ -81,6 +81,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
         private val AUTH_ATTEMPTS = listOf(
             AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = false),
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = true, includeProtocolVersion = false),
             AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = true),
             AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_LEGACY, useCryptFlag = false, includeProtocolVersion = false)
         )
@@ -796,9 +797,9 @@ class MiBandGateway private constructor(private val appContext: Context) {
                 val key = activeAuthKeyBytes
                 if (!triedFallbackResp && key != null && challenge != null) {
                     triedFallbackResp = true
-                    val fallbackCrypt = false
-                    val fallbackFlag = MiBandProtocol.AUTH_FLAG_DEFAULT
-                    logMsg("AES 응답 거부(cmd=0x$cmdHex, status=0x$statusHex) — 표준 모드(cmd=0x03, flag=0x00)로 재시도")
+                    val fallbackCrypt = !activeUseCryptFlag
+                    val fallbackFlag = if (currentAuthFlag == MiBandProtocol.AUTH_FLAG_DEFAULT) MiBandProtocol.AUTH_FLAG_LEGACY else MiBandProtocol.AUTH_FLAG_DEFAULT
+                    logMsg("AES 응답 거부(cmd=0x$cmdHex, status=0x$statusHex) — 대체 플래그(cmd=${if (fallbackCrypt) "0x83" else "0x03"}, flag=0x${String.format("%02X", fallbackFlag)})로 재시도")
                     val response = MiBandProtocol.buildEncryptedAuthResponse(
                         authKey16 = key,
                         random16 = challenge,

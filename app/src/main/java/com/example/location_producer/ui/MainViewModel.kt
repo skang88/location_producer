@@ -198,6 +198,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         miBandGateway.disconnect()
     }
 
+    fun clearLogs() {
+        SensorStreamingService.clearLogs()
+    }
+
     fun startService(): Boolean {
         val app = getApplication<Application>()
         val trimmedId = _deviceId.value.trim()

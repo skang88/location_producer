@@ -822,20 +822,27 @@ fun MainScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            TextButton(
-                                onClick = {
-                                    val logsText = serviceStatus.logs.joinToString("\n")
-                                    if (logsText.isNotBlank()) {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val clip = ClipData.newPlainText("Operation Logs", logsText)
-                                        clipboard.setPrimaryClip(clip)
-                                        Toast.makeText(context, "로그가 클립보드에 복사되었습니다!", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "복사할 로그가 없습니다.", Toast.LENGTH_SHORT).show()
+                            Row {
+                                TextButton(
+                                    onClick = {
+                                        val logsText = serviceStatus.logs.joinToString("\n")
+                                        if (logsText.isNotBlank()) {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val clip = ClipData.newPlainText("Operation Logs", logsText)
+                                            clipboard.setPrimaryClip(clip)
+                                            Toast.makeText(context, "로그가 클립보드에 복사되었습니다!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "복사할 로그가 없습니다.", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
+                                ) {
+                                    Text("Copy Logs")
                                 }
-                            ) {
-                                Text("Copy Logs")
+                                TextButton(
+                                    onClick = { viewModel.clearLogs() }
+                                ) {
+                                    Text("Clear")
+                                }
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))

@@ -74,6 +74,10 @@ class SensorStreamingService : Service() {
             currentLogs.add(msg)
             _serviceStatus.value = _serviceStatus.value.copy(logs = currentLogs)
         }
+
+        fun clearLogs() {
+            _serviceStatus.value = _serviceStatus.value.copy(logs = emptyList())
+        }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null

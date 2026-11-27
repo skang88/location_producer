@@ -73,8 +73,8 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
     companion object {
         private const val TAG = "MiBandGateway"
-        private const val GATT_OP_TIMEOUT_MS = 3_000L
-        private const val AUTH_ATTEMPT_TIMEOUT_MS = 2_000L
+        private const val GATT_OP_TIMEOUT_MS = 5_000L
+        private const val AUTH_ATTEMPT_TIMEOUT_MS = 6_000L
         private const val HR_PING_INTERVAL_MS = 12_000L
         private const val HR_FRESHNESS_TIMEOUT_MS = 15_000L
         private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 10_000L)
@@ -423,6 +423,14 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
         try {
             val device = adapter.getRemoteDevice(targetAddress)
+            if (device.bondState == BluetoothDevice.BOND_NONE && hasBluetoothConnectPermission()) {
+                logMsg("OS 블루투스 페어링(Bonding) 요청: $targetAddress")
+                try {
+                    device.createBond()
+                } catch (e: Exception) {
+                    Log.w(TAG, "createBond error: ${e.message}")
+                }
+            }
             bluetoothGatt = device.connectGatt(
                 appContext,
                 false,

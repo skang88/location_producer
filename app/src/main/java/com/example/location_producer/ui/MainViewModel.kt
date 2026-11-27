@@ -145,12 +145,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
 
                         updateMiBandAuthKey(matched.authKey)
-                        if (targetAddress.isEmpty()) {
-                            _miBandAddress.value = matched.mac
-                            _miBandName.value = matched.deviceName
-                            repository.miBandAddress = matched.mac
-                            repository.miBandName = matched.deviceName
-                        }
+                        _miBandAddress.value = matched.mac
+                        _miBandName.value = matched.deviceName
+                        repository.miBandAddress = matched.mac
+                        repository.miBandName = matched.deviceName
 
                         val msg = "Zepp Cloud에서 Auth Key 수신 성공! (${matched.deviceName})"
                         SensorStreamingService.addLog("[Zepp Cloud] $msg")

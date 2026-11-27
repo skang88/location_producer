@@ -300,14 +300,9 @@ fun MainScreen(
                             } else {
                                 "-- BPM"
                             }
-                            val spo2Display = if (miBandState.isVitalsValid && miBandState.spo2 > 0) {
-                                "${miBandState.spo2} %"
-                            } else {
-                                "-- %"
-                            }
 
                             Text(
-                                text = "Live Vitals: $bpmDisplay · SpO2: $spo2Display",
+                                text = "Live Heart Rate: $bpmDisplay",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = if (miBandState.isVitalsValid) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
@@ -706,9 +701,8 @@ fun MainScreen(
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             val hrBpmText = if (vitals.isValid && vitals.heartRate > 0) "${vitals.heartRate} BPM" else "-- BPM"
-                            val spo2Text = if (vitals.isValid && vitals.spo2 > 0) "${vitals.spo2} %" else "-- %"
                             Text(
-                                text = "Heart Rate: $hrBpmText · SpO2: $spo2Text",
+                                text = "Heart Rate: $hrBpmText",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,

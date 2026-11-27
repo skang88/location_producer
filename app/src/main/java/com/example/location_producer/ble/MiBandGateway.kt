@@ -50,7 +50,6 @@ data class MiBandGatewayState(
     val deviceName: String = "",
     val deviceAddress: String = "",
     val bpm: Int = 0,
-    val spo2: Int = 0,
     val isVitalsValid: Boolean = false,
     val lastUpdatedAt: Long = 0L,
     val statusMessage: String? = null
@@ -353,7 +352,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
             deviceName = targetName,
             deviceAddress = targetAddress,
             bpm = 0,
-            spo2 = 0,
             isVitalsValid = false,
             statusMessage = "BLE 연결 중... ($targetName)"
         )
@@ -492,7 +490,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
                     _gatewayState.value = _gatewayState.value.copy(
                         status = BleConnectionStatus.DISCONNECTED,
                         bpm = 0,
-                        spo2 = 0,
                         isVitalsValid = false,
                         statusMessage = "연결 끊김 (status=$status)"
                     )
@@ -563,31 +560,19 @@ class MiBandGateway private constructor(private val appContext: Context) {
     }
 
     private fun subscribeVitalsServices(gatt: BluetoothGatt) {
-        val discoveredUuids = gatt.services.map { "0x" + it.uuid.toString().substring(4, 8) }
-        logMsg("GATT 서비스 발견: ${discoveredUuids.joinToString(", ")}")
+        val hrService = gatt.getService(MiBandProtocol.SERVICE_HEART_RATE)
+        val hrChar = hrService?.getCharacteristic(MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT)
 
-        var subscribedCount = 0
-
-        for (service in gatt.services) {
-            for (characteristic in service.characteristics) {
-                val props = characteristic.properties
-                val hasNotify = (props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
-                val hasIndicate = (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
-
-                if (hasNotify || hasIndicate) {
-                    val shortUuid = characteristic.uuid.toString().substring(4, 8)
-                    enableNotification(gatt, characteristic)
-                    subscribedCount++
-                    Log.d(TAG, "Notification enabled for characteristic 0x$shortUuid")
-                }
-            }
+        if (hrChar != null) {
+            enableNotification(gatt, hrChar)
+            logMsg("표준 BLE Heart Rate(0x2A37) Notification 구독 성공")
+        } else {
+            logMsg("경고: Heart Rate Service(0x180D) 특성을 찾을 수 없습니다.")
         }
-
-        logMsg("총 $subscribedCount 개 BLE Vitals/센서 알림 채널 구독 완료")
 
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.CONNECTED_STREAMING,
-            statusMessage = "BLE 심박수 & SpO2 데이터 수신 대기 중"
+            statusMessage = "BLE 실시간 심박수 수신 대기 중"
         )
     }
 
@@ -596,32 +581,15 @@ class MiBandGateway private constructor(private val appContext: Context) {
         value: ByteArray
     ) {
         val now = System.currentTimeMillis()
-        val shortUuid = characteristic.uuid.toString().substring(4, 8)
-
-        when (characteristic.uuid) {
-            MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT -> {
-                val bpm = MiBandProtocol.parseHeartRateMeasurement(value) ?: return
-                _gatewayState.value = _gatewayState.value.copy(
-                    status = BleConnectionStatus.CONNECTED_STREAMING,
-                    bpm = bpm,
-                    isVitalsValid = true,
-                    lastUpdatedAt = now,
-                    statusMessage = "수신 중: $bpm BPM"
-                )
-            }
-            else -> {
-                val spo2 = MiBandProtocol.parseSpO2Measurement(value)
-                if (spo2 != null && spo2 != _gatewayState.value.bpm) {
-                    _gatewayState.value = _gatewayState.value.copy(
-                        status = BleConnectionStatus.CONNECTED_STREAMING,
-                        spo2 = spo2,
-                        isVitalsValid = true,
-                        lastUpdatedAt = now,
-                        statusMessage = "SpO2 수신 중: $spo2 %"
-                    )
-                    logMsg("SpO2 산소포화도 수신: $spo2 % (0x$shortUuid)")
-                }
-            }
+        if (characteristic.uuid == MiBandProtocol.CHAR_HEART_RATE_MEASUREMENT) {
+            val bpm = MiBandProtocol.parseHeartRateMeasurement(value) ?: return
+            _gatewayState.value = _gatewayState.value.copy(
+                status = BleConnectionStatus.CONNECTED_STREAMING,
+                bpm = bpm,
+                isVitalsValid = true,
+                lastUpdatedAt = now,
+                statusMessage = "수신 중: $bpm BPM"
+            )
         }
     }
 
@@ -647,41 +615,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
-    private fun writeCharacteristicRaw(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic,
-        value: ByteArray
-    ): Boolean {
-        if (!hasBluetoothConnectPermission()) return false
-
-        val writeType = if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0) {
-            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        } else {
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        }
-
-        characteristic.value = value
-        characteristic.writeType = writeType
-
-        val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(
-                characteristic,
-                value,
-                writeType
-            ) == BluetoothStatusCodes.SUCCESS
-        } else {
-            gatt.writeCharacteristic(characteristic)
-        }
-
-        if (success && writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
-            onGattOperationComplete()
-        }
-
-        return success
-    }
-
-    @SuppressLint("MissingPermission")
-    @Suppress("DEPRECATION")
     private fun writeDescriptorRaw(
         gatt: BluetoothGatt,
         descriptor: BluetoothGattDescriptor,
@@ -703,7 +636,6 @@ class MiBandGateway private constructor(private val appContext: Context) {
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.CONNECTING,
             bpm = 0,
-            spo2 = 0,
             isVitalsValid = false,
             statusMessage = "연결 끊김 — ${delayMs / 1000}초 후 재연결 시도..."
         )
@@ -718,11 +650,10 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
     fun getLatestVitals(): VitalsData {
         val state = _gatewayState.value
-        val isFresh = (state.bpm > 0 || state.spo2 > 0) &&
+        val isFresh = state.bpm > 0 &&
             (System.currentTimeMillis() - state.lastUpdatedAt) < VITALS_FRESHNESS_TIMEOUT_MS
         return VitalsData(
             heartRate = if (isFresh) state.bpm else 0,
-            spo2 = if (isFresh) state.spo2 else 0,
             isValid = isFresh,
             updatedAt = state.lastUpdatedAt,
             source = state.deviceName.ifBlank { state.deviceAddress }

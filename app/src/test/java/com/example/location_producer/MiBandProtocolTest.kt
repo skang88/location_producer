@@ -21,15 +21,4 @@ class MiBandProtocolTest {
         assertNull(MiBandProtocol.parseHeartRateMeasurement(byteArrayOf()))
         assertNull(MiBandProtocol.parseHeartRateMeasurement(byteArrayOf(0x01, 0x40)))
     }
-
-    @Test
-    fun parseSpO2Measurement_handlesValidAndInvalid() {
-        assertEquals(98, MiBandProtocol.parseSpO2Measurement(byteArrayOf(0x00, 0x00, 98.toByte())))
-        assertEquals(100, MiBandProtocol.parseSpO2Measurement(byteArrayOf(0x00, 0x00, 100.toByte())))
-        assertEquals(75, MiBandProtocol.parseSpO2Measurement(byteArrayOf(0x00, 0x00, 75.toByte())))
-
-        assertNull(MiBandProtocol.parseSpO2Measurement(byteArrayOf(0x00, 0x00, 50.toByte())))
-        assertNull(MiBandProtocol.parseSpO2Measurement(byteArrayOf(0x00, 0x00)))
-        assertNull(MiBandProtocol.parseSpO2Measurement(byteArrayOf()))
-    }
 }

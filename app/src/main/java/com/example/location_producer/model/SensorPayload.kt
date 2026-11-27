@@ -64,14 +64,12 @@ data class BarometerData(
 
 data class VitalsData(
     val heartRate: Int = 0,
-    val spo2: Int = 0,
     val isValid: Boolean = false,
     val updatedAt: Long = 0L,
     val source: String = ""
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("heart_rate", heartRate)
-        put("spo2", spo2)
         put("is_valid", isValid)
         put("updated_at", updatedAt)
         put("source", source)

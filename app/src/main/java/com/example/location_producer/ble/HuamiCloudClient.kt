@@ -102,6 +102,10 @@ object HuamiCloudClient {
         val responseCode = conn.responseCode
         val redirectUrl = conn.getHeaderField("Location") ?: ""
 
+        if (responseCode == 429) {
+            throw Exception("요청이 너무 많아 Zepp 서버에서 잠시 제한 중입니다 (HTTP 429). 이미 발급받아 저장된 Auth Key로 [Connect] 하시면 됩니다.")
+        }
+
         if (responseCode !in 200..303) {
             val errText = conn.errorStream?.use { readStream(it) } ?: ""
             throw Exception("로그인 HTTP $responseCode 오류: $errText")

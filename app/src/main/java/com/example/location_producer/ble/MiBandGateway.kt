@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
@@ -62,27 +63,27 @@ data class MiBandGatewayState(
     val statusMessage: String? = null
 )
 
-class MiBandGateway private constructor(private val appContext: Context) {
+private data class AuthAttemptSpec(
+    val authFlag: Byte,
+    val useCryptFlag: Boolean,
+    val includeProtocolVersion: Boolean = false
+)
 
-    private data class AuthAttempt(
-        val authFlag: Byte,
-        val useCryptFlag: Boolean,
-        val includeProtocolVersion: Boolean
-    )
+class MiBandGateway private constructor(private val appContext: Context) {
 
     companion object {
         private const val TAG = "MiBandGateway"
         private const val GATT_OP_TIMEOUT_MS = 3_000L
-        private const val AUTH_ATTEMPT_TIMEOUT_MS = 2_500L
+        private const val AUTH_ATTEMPT_TIMEOUT_MS = 2_000L
         private const val HR_PING_INTERVAL_MS = 12_000L
         private const val HR_FRESHNESS_TIMEOUT_MS = 15_000L
         private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 10_000L)
 
         private val AUTH_ATTEMPTS = listOf(
-            AuthAttempt(MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = false),
-            AuthAttempt(MiBandProtocol.AUTH_FLAG_LEGACY, useCryptFlag = false, includeProtocolVersion = false),
-            AuthAttempt(MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = true),
-            AuthAttempt(MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = true, includeProtocolVersion = true)
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = false),
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = false, includeProtocolVersion = true),
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_DEFAULT, useCryptFlag = true, includeProtocolVersion = false),
+            AuthAttemptSpec(authFlag = MiBandProtocol.AUTH_FLAG_LEGACY, useCryptFlag = false, includeProtocolVersion = false)
         )
 
         @Volatile
@@ -140,9 +141,13 @@ class MiBandGateway private constructor(private val appContext: Context) {
     private var targetName: String = ""
     private var targetAuthKeyHex: String = ""
     private var activeAuthKeyBytes: ByteArray? = null
+
     private var currentAuthFlag: Byte = MiBandProtocol.AUTH_FLAG_DEFAULT
-    private var activeUseCryptFlag: Boolean = false
+    private var activeUseCryptFlag = false
     private var challengeReceived = false
+
+    private var lastChallenge16: ByteArray? = null
+    private var triedFallbackResp = false
 
     fun hasBluetoothConnectPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -647,6 +652,8 @@ class MiBandGateway private constructor(private val appContext: Context) {
         currentAuthFlag = MiBandProtocol.AUTH_FLAG_DEFAULT
         activeUseCryptFlag = false
         challengeReceived = false
+        lastChallenge16 = null
+        triedFallbackResp = false
 
         _gatewayState.value = _gatewayState.value.copy(
             status = BleConnectionStatus.AUTHENTICATING,
@@ -721,17 +728,19 @@ class MiBandGateway private constructor(private val appContext: Context) {
         when (parsed) {
             is MiBandProtocol.AuthNotification.Challenge -> {
                 challengeReceived = true
+                triedFallbackResp = false
                 authJob?.cancel()
                 val key = activeAuthKeyBytes ?: return
+                lastChallenge16 = parsed.random16
                 val useCrypt = parsed.command == 0x82.toByte() || activeUseCryptFlag
-                logMsg("인증 챌린지 수신 — AES 응답 전송 (crypt=$useCrypt)")
+                logMsg("인증 챌린지 수신 — AES 응답 전송 (flag=0x${String.format("%02X", currentAuthFlag)}, crypt=$useCrypt)")
                 val response = MiBandProtocol.buildEncryptedAuthResponse(
                     authKey16 = key,
                     random16 = parsed.random16,
                     authFlag = currentAuthFlag,
                     useCryptFlag = useCrypt
                 )
-                logMsg("Auth TX (resp): ${response.size} bytes")
+                logMsg("Auth TX (resp): ${MiBandProtocol.bytesToHex(response)}")
                 enqueueGattOperation {
                     writeCharacteristicRaw(gatt, authChar, response)
                 }
@@ -742,11 +751,32 @@ class MiBandGateway private constructor(private val appContext: Context) {
                 subscribeHeartRate(gatt, sendControlCommands = true)
             }
             is MiBandProtocol.AuthNotification.AuthFailure -> {
-                authJob?.cancel()
-                authFailed = true
                 val cmdHex = String.format("%02X", parsed.command)
                 val statusHex = String.format("%02X", parsed.status)
-                val msg = "Mi Band 인증 실패 (Auth Key 확인 필요, cmd=0x$cmdHex, status=0x$statusHex)"
+                logMsg("Auth RX Failure: cmd=0x$cmdHex, status=0x$statusHex")
+
+                val challenge = lastChallenge16
+                val key = activeAuthKeyBytes
+                if (!triedFallbackResp && key != null && challenge != null) {
+                    triedFallbackResp = true
+                    val fallbackFlag = if (currentAuthFlag == MiBandProtocol.AUTH_FLAG_DEFAULT) MiBandProtocol.AUTH_FLAG_LEGACY else MiBandProtocol.AUTH_FLAG_DEFAULT
+                    val fallbackCrypt = !activeUseCryptFlag
+                    logMsg("AES 응답 거부(status=0x$statusHex) — 대체 플래그(flag=0x${String.format("%02X", fallbackFlag)}, crypt=$fallbackCrypt)로 재시도")
+                    val response = MiBandProtocol.buildEncryptedAuthResponse(
+                        authKey16 = key,
+                        random16 = challenge,
+                        authFlag = fallbackFlag,
+                        useCryptFlag = fallbackCrypt
+                    )
+                    enqueueGattOperation {
+                        writeCharacteristicRaw(gatt, authChar, response)
+                    }
+                    return
+                }
+
+                authJob?.cancel()
+                authFailed = true
+                val msg = "Mi Band 인증 실패 (cmd=0x$cmdHex, status=0x$statusHex). Zepp Life 앱을 [강제 중지] 후 다시 시도해보세요."
                 logMsg(msg)
                 _gatewayState.value = _gatewayState.value.copy(
                     status = BleConnectionStatus.ERROR,
@@ -845,37 +875,16 @@ class MiBandGateway private constructor(private val appContext: Context) {
         value: ByteArray
     ): Boolean {
         if (!hasBluetoothConnectPermission()) return false
-        val props = characteristic.properties
-        val supportsWrite = (props and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
-        val supportsWriteNoResp = (props and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
-        val writeType = when {
-            characteristic.uuid == MiBandProtocol.CHAR_HUAMI_AUTH && supportsWriteNoResp ->
-                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            supportsWrite -> BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            supportsWriteNoResp -> BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            else -> BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        }
-
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val result = gatt.writeCharacteristic(characteristic, value, writeType)
-            if (result != BluetoothGatt.GATT_SUCCESS) {
-                logMsg(
-                    "writeCharacteristic 실패 (${characteristic.uuid}, type=$writeType, " +
-                        "props=0x${props.toString(16)}): code=$result"
-                )
-            }
-            result == BluetoothGatt.GATT_SUCCESS
+            gatt.writeCharacteristic(
+                characteristic,
+                value,
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            ) == BluetoothStatusCodes.SUCCESS
         } else {
-            characteristic.writeType = writeType
+            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             characteristic.value = value
-            val ok = gatt.writeCharacteristic(characteristic)
-            if (!ok) {
-                logMsg(
-                    "writeCharacteristic 실패 (${characteristic.uuid}, type=$writeType, " +
-                        "props=0x${props.toString(16)})"
-                )
-            }
-            ok
+            gatt.writeCharacteristic(characteristic)
         }
     }
 
@@ -888,18 +897,10 @@ class MiBandGateway private constructor(private val appContext: Context) {
     ): Boolean {
         if (!hasBluetoothConnectPermission()) return false
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val result = gatt.writeDescriptor(descriptor, value)
-            if (result != BluetoothGatt.GATT_SUCCESS) {
-                logMsg("writeDescriptor 실패 (${descriptor.characteristic.uuid}): code=$result")
-            }
-            result == BluetoothGatt.GATT_SUCCESS
+            gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS
         } else {
             descriptor.value = value
-            val ok = gatt.writeDescriptor(descriptor)
-            if (!ok) {
-                logMsg("writeDescriptor 실패 (${descriptor.characteristic.uuid})")
-            }
-            ok
+            gatt.writeDescriptor(descriptor)
         }
     }
 

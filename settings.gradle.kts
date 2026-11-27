@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "location_producer"
 include(":app")
+project(":app").projectDir = file("android/app")

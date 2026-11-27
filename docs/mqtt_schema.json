@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RescuerSensorPayload",
+  "description": "JSON payload schema streamed at ~50Hz by Location Producer Android App & ESP32 ZUPT/PDR sensor node",
+  "type": "object",
+  "properties": {
+    "device_id": {
+      "type": "string",
+      "description": "Unique identifier for the rescuer or producer device (e.g., RESCUER_01)"
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Epoch timestamp in milliseconds"
+    },
+    "gps": {
+      "type": "object",
+      "properties": {
+        "lat": { "type": "number", "description": "Latitude in degrees" },
+        "lng": { "type": "number", "description": "Longitude in degrees" },
+        "alt": { "type": "number", "description": "Altitude in meters" },
+        "accuracy": { "type": "number", "description": "Location accuracy in meters" },
+        "is_valid": { "type": "boolean", "description": "True if GPS fix is active" }
+      },
+      "required": ["lat", "lng", "alt", "accuracy", "is_valid"]
+    },
+    "imu": {
+      "type": "object",
+      "properties": {
+        "accel": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number", "description": "Acceleration X in m/s²" },
+            "y": { "type": "number", "description": "Acceleration Y in m/s²" },
+            "z": { "type": "number", "description": "Acceleration Z in m/s²" }
+          },
+          "required": ["x", "y", "z"]
+        },
+        "gyro": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number", "description": "Angular velocity X in rad/s" },
+            "y": { "type": "number", "description": "Angular velocity Y in rad/s" },
+            "z": { "type": "number", "description": "Angular velocity Z in rad/s" }
+          },
+          "required": ["x", "y", "z"]
+        },
+        "yaw": { "type": "number", "description": "Compass azimuth / yaw in degrees (0-360)" }
+      },
+      "required": ["accel", "gyro", "yaw"]
+    },
+    "barometer": {
+      "type": "object",
+      "properties": {
+        "pressure": { "type": "number", "description": "Atmospheric pressure in hPa" }
+      },
+      "required": ["pressure"]
+    },
+    "vitals": {
+      "type": "object",
+      "properties": {
+        "heart_rate": { "type": "integer", "description": "Real-time heart rate in BPM" },
+        "is_valid": { "type": "boolean", "description": "True if heart rate signal is valid" },
+        "updated_at": { "type": "integer", "description": "Timestamp when vitals were last updated" },
+        "source": { "type": "string", "description": "Source BLE device name/address" }
+      },
+      "required": ["heart_rate", "is_valid", "updated_at", "source"]
+    }
+  },
+  "required": ["device_id", "timestamp", "gps", "imu", "barometer", "vitals"]
+}

@@ -6,9 +6,7 @@
  *   - IMU: Bosch BMI160 (6-axis Accel + Gyro, I2C 0x68 / 0x69)
  *   - Barometer: Bosch BMP388 (Pressure + Temp, I2C 0x76 / 0x77)
  *
- * Required Library (Arduino IDE Library Manager):
- *   - Adafruit BMP3XX Library (by Adafruit)
- *   - (BMI160 uses direct Wire I2C — no external library required)
+ * No external libraries required! Uses built-in ESP32 BLE + Wire (I2C).
  *
  * Communication: BLE Nordic UART Service (6E400001) @ ~50Hz (20ms)
  */
@@ -18,7 +16,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <Wire.h>
-#include <Adafruit_BMP3XX.h>
+#include <math.h>
 
 // ==========================================
 // BLE Nordic UART Service UUIDs
@@ -38,6 +36,18 @@
 #define BMI160_REG_GYR_RANGE 0x43
 #define BMI160_REG_CMD       0x7E
 
+// ==========================================
+// BMP388 I2C Registers & Constants
+// ==========================================
+#define BMP388_REG_CHIP_ID   0x00 // 0x50 for BMP388, 0x60 for BMP390
+#define BMP388_REG_DATA      0x04 // 6 bytes: P[23:0], T[23:0]
+#define BMP388_REG_PWR_CTRL  0x1B
+#define BMP388_REG_OSR       0x1C
+#define BMP388_REG_ODR       0x1D
+#define BMP388_REG_CONFIG    0x1F
+#define BMP388_REG_CALIB     0x31 // 21 bytes NVM calibration data
+#define BMP388_REG_CMD       0x7E
+
 // Scale factors:
 // Accel ±4G -> 8192 LSB/g -> m/s^2
 static const float ACC_SCALE = 9.80665f / 8192.0f;
@@ -52,8 +62,14 @@ bool oldDeviceConnected = false;
 uint8_t bmi160Addr = 0;
 bool bmi160Ready = false;
 
-Adafruit_BMP3XX bmp;
-bool bmpReady = false;
+uint8_t bmp388Addr = 0;
+bool bmp388Ready = false;
+
+// BMP388 floating-point calibration coefficients
+struct Bmp388Calib {
+  double t1, t2, t3;
+  double p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11;
+} bmpCalib;
 
 // Gyro zero-rate bias (calibrated on boot while stationary)
 float gyroBiasX = 0.0f, gyroBiasY = 0.0f, gyroBiasZ = 0.0f;
@@ -79,6 +95,17 @@ uint8_t i2cReadByte(uint8_t addr, uint8_t reg) {
   return Wire.available() ? Wire.read() : 0xFF;
 }
 
+bool i2cReadBytes(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t len) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(addr, len) != len) return false;
+  for (uint8_t i = 0; i < len; i++) {
+    buf[i] = Wire.read();
+  }
+  return true;
+}
+
 void i2cWriteByte(uint8_t addr, uint8_t reg, uint8_t val) {
   Wire.beginTransmission(addr);
   Wire.write(reg);
@@ -86,6 +113,9 @@ void i2cWriteByte(uint8_t addr, uint8_t reg, uint8_t val) {
   Wire.endTransmission();
 }
 
+// ==========================================
+// BMI160 Driver
+// ==========================================
 bool initBMI160() {
   uint8_t candidates[2] = {0x68, 0x69};
   for (int i = 0; i < 2; i++) {
@@ -125,18 +155,15 @@ bool initBMI160() {
 
 bool readBMI160Raw(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
   if (!bmi160Ready) return false;
-  Wire.beginTransmission(bmi160Addr);
-  Wire.write(BMI160_REG_DATA_GYR);
-  if (Wire.endTransmission(false) != 0) return false;
+  uint8_t buf[12];
+  if (!i2cReadBytes(bmi160Addr, BMI160_REG_DATA_GYR, buf, 12)) return false;
 
-  if (Wire.requestFrom(bmi160Addr, (uint8_t)12) != 12) return false;
-
-  int16_t rgx = (int16_t)(Wire.read() | (Wire.read() << 8));
-  int16_t rgy = (int16_t)(Wire.read() | (Wire.read() << 8));
-  int16_t rgz = (int16_t)(Wire.read() | (Wire.read() << 8));
-  int16_t rax = (int16_t)(Wire.read() | (Wire.read() << 8));
-  int16_t ray = (int16_t)(Wire.read() | (Wire.read() << 8));
-  int16_t raz = (int16_t)(Wire.read() | (Wire.read() << 8));
+  int16_t rgx = (int16_t)(buf[0] | (buf[1] << 8));
+  int16_t rgy = (int16_t)(buf[2] | (buf[3] << 8));
+  int16_t rgz = (int16_t)(buf[4] | (buf[5] << 8));
+  int16_t rax = (int16_t)(buf[6] | (buf[7] << 8));
+  int16_t ray = (int16_t)(buf[8] | (buf[9] << 8));
+  int16_t raz = (int16_t)(buf[10] | (buf[11] << 8));
 
   gx = rgx * GYR_SCALE - gyroBiasX;
   gy = rgy * GYR_SCALE - gyroBiasY;
@@ -167,17 +194,106 @@ void calibrateGyroBias() {
   Serial.printf("[OK] Gyro bias: (%.4f, %.4f, %.4f) rad/s\n", gyroBiasX, gyroBiasY, gyroBiasZ);
 }
 
+// ==========================================
+// BMP388 Direct I2C Driver (No Library Needed)
+// ==========================================
 bool initBMP388() {
-  if (bmp.begin_I2C(0x76) || bmp.begin_I2C(0x77)) {
-    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_2X);
-    bmp.setPressureOversampling(BMP3_OVERSAMPLING_8X);
-    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
-    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
-    Serial.println("[OK] BMP388 initialized");
-    return true;
+  uint8_t candidates[2] = {0x76, 0x77};
+  for (int i = 0; i < 2; i++) {
+    uint8_t chipId = i2cReadByte(candidates[i], BMP388_REG_CHIP_ID);
+    if (chipId == 0x50 || chipId == 0x60) {
+      bmp388Addr = candidates[i];
+      break;
+    }
   }
-  Serial.println("[WARN] BMP388 not found at 0x76 or 0x77 (phone barometer will be used)");
-  return false;
+  if (bmp388Addr == 0) {
+    Serial.println("[WARN] BMP388 not found at 0x76 or 0x77 (phone barometer will be used)");
+    return false;
+  }
+
+  // Soft reset
+  i2cWriteByte(bmp388Addr, BMP388_REG_CMD, 0xB6);
+  delay(20);
+
+  // Read 21-byte NVM calibration data
+  uint8_t c[21];
+  if (!i2cReadBytes(bmp388Addr, BMP388_REG_CALIB, c, 21)) {
+    Serial.println("[WARN] Failed to read BMP388 calibration");
+    return false;
+  }
+
+  uint16_t nvm_t1 = (uint16_t)(c[0] | (c[1] << 8));
+  uint16_t nvm_t2 = (uint16_t)(c[2] | (c[3] << 8));
+  int8_t   nvm_t3 = (int8_t)c[4];
+  int16_t  nvm_p1 = (int16_t)(c[5] | (c[6] << 8));
+  int16_t  nvm_p2 = (int16_t)(c[7] | (c[8] << 8));
+  int8_t   nvm_p3 = (int8_t)c[9];
+  int8_t   nvm_p4 = (int8_t)c[10];
+  uint16_t nvm_p5 = (uint16_t)(c[11] | (c[12] << 8));
+  uint16_t nvm_p6 = (uint16_t)(c[13] | (c[14] << 8));
+  int8_t   nvm_p7 = (int8_t)c[15];
+  int8_t   nvm_p8 = (int8_t)c[16];
+  int16_t  nvm_p9 = (int16_t)(c[17] | (c[18] << 8));
+  int8_t   nvm_p10 = (int8_t)c[19];
+  int8_t   nvm_p11 = (int8_t)c[20];
+
+  bmpCalib.t1  = (double)nvm_t1 * 256.0;
+  bmpCalib.t2  = (double)nvm_t2 / 1073741824.0;          // 2^30
+  bmpCalib.t3  = (double)nvm_t3 / 281474976710656.0;     // 2^48
+  bmpCalib.p1  = ((double)nvm_p1 - 16384.0) / 1048576.0; // 2^20
+  bmpCalib.p2  = ((double)nvm_p2 - 16384.0) / 536870912.0; // 2^29
+  bmpCalib.p3  = (double)nvm_p3 / 4294967296.0;          // 2^32
+  bmpCalib.p4  = (double)nvm_p4 / 137438953472.0;        // 2^37
+  bmpCalib.p5  = (double)nvm_p5 * 8.0;                   // 2^-3
+  bmpCalib.p6  = (double)nvm_p6 / 64.0;                  // 2^6
+  bmpCalib.p7  = (double)nvm_p7 / 256.0;                 // 2^8
+  bmpCalib.p8  = (double)nvm_p8 / 32768.0;               // 2^15
+  bmpCalib.p9  = (double)nvm_p9 / 281474976710656.0;     // 2^48
+  bmpCalib.p10 = (double)nvm_p10 / 281474976710656.0;    // 2^48
+  bmpCalib.p11 = (double)nvm_p11 / pow(2.0, 65.0);
+
+  // Configure BMP388: OSR press=8x (0x03), ODR=50Hz (0x02), IIR=3 (0x02), Normal mode (0x33)
+  i2cWriteByte(bmp388Addr, BMP388_REG_OSR, 0x03);
+  i2cWriteByte(bmp388Addr, BMP388_REG_ODR, 0x02);
+  i2cWriteByte(bmp388Addr, BMP388_REG_CONFIG, 0x02);
+  i2cWriteByte(bmp388Addr, BMP388_REG_PWR_CTRL, 0x33);
+  delay(20);
+
+  Serial.printf("[OK] BMP388 initialized at I2C 0x%02X\n", bmp388Addr);
+  return true;
+}
+
+float readBMP388PressureHpa() {
+  if (!bmp388Ready) return 0.0f;
+  uint8_t buf[6];
+  if (!i2cReadBytes(bmp388Addr, BMP388_REG_DATA, buf, 6)) return 0.0f;
+
+  uint32_t uncomp_press = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16);
+  uint32_t uncomp_temp  = (uint32_t)buf[3] | ((uint32_t)buf[4] << 8) | ((uint32_t)buf[5] << 16);
+
+  // Compensate temperature (Bosch datasheet formula)
+  double pd1 = (double)uncomp_temp - bmpCalib.t1;
+  double pd2 = pd1 * bmpCalib.t2;
+  double t_lin = pd2 + (pd1 * pd1) * bmpCalib.t3;
+
+  // Compensate pressure (Bosch datasheet formula)
+  double pd_1 = bmpCalib.p6 * t_lin;
+  double pd_2 = bmpCalib.p7 * (t_lin * t_lin);
+  double pd_3 = bmpCalib.p8 * (t_lin * t_lin * t_lin);
+  double po1  = bmpCalib.p5 + pd_1 + pd_2 + pd_3;
+
+  double pd_4 = bmpCalib.p2 * t_lin;
+  double pd_5 = bmpCalib.p3 * (t_lin * t_lin);
+  double pd_6 = bmpCalib.p4 * (t_lin * t_lin * t_lin);
+  double po2  = (double)uncomp_press * (bmpCalib.p1 + pd_4 + pd_5 + pd_6);
+
+  double p2   = (double)uncomp_press * (double)uncomp_press;
+  double pd_7 = bmpCalib.p9 + bmpCalib.p10 * t_lin;
+  double pd_8 = p2 * pd_7;
+  double pd_9 = pd_8 + (p2 * (double)uncomp_press) * bmpCalib.p11;
+
+  double comp_press_pa = po1 + po2 + pd_9;
+  return (float)(comp_press_pa / 100.0); // Pa -> hPa
 }
 
 void setup() {
@@ -191,7 +307,7 @@ void setup() {
 
   bmi160Ready = initBMI160();
   calibrateGyroBias();
-  bmpReady = initBMP388();
+  bmp388Ready = initBMP388();
 
   // Initialize BLE with 512-byte MTU support
   BLEDevice::init("ESP32_FOOT_IMU");
@@ -237,10 +353,7 @@ void loop() {
     float gx = 0.0f, gy = 0.0f, gz = 0.0f;
     readBMI160Raw(ax, ay, az, gx, gy, gz);
 
-    float pressure = 0.0f;
-    if (bmpReady && bmp.performReading()) {
-      pressure = (float)(bmp.pressure / 100.0); // Pa -> hPa
-    }
+    float pressure = readBMP388PressureHpa();
 
     // Note: BMI160 is a 6-axis IMU (no magnetometer), so "yaw" is omitted
     // and Android app fuses phone compass yaw with ESP32 gyro/accel.

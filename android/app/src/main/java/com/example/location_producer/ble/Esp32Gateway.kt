@@ -52,7 +52,11 @@ data class Esp32GatewayState(
     val imu: ImuData = ImuData(),
     val barometer: BarometerData = BarometerData(),
     val isDataValid: Boolean = false,
+    val hasValidImu: Boolean = false,
+    val hasValidBaro: Boolean = false,
     val lastUpdatedAt: Long = 0L,
+    val lastImuUpdatedAt: Long = 0L,
+    val lastBaroUpdatedAt: Long = 0L,
     val statusMessage: String? = null
 )
 
@@ -104,6 +108,7 @@ class Esp32Gateway private constructor(private val appContext: Context) {
     private var targetName: String = ""
 
     private val loggedUuids = mutableSetOf<String>()
+    private val jsonBuffers = mutableMapOf<String, StringBuilder>()
 
     fun hasBluetoothConnectPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -165,6 +170,7 @@ class Esp32Gateway private constructor(private val appContext: Context) {
         reconnectJob?.cancel()
         cleanupGatt()
         loggedUuids.clear()
+        jsonBuffers.clear()
 
         targetAddress = cleanAddress
         targetName = name.ifBlank { cleanAddress }
@@ -302,13 +308,15 @@ class Esp32Gateway private constructor(private val appContext: Context) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 reconnectJob?.cancel()
                 reconnectAttempt = 0
-                logMsg("ESP32 GATT 연결 성공 — 서비스 탐색 시작")
+                logMsg("ESP32 GATT 연결 성공 — MTU 확장 및 서비스 탐색 시작")
                 _gatewayState.value = _gatewayState.value.copy(
                     status = BleConnectionStatus.CONNECTING,
-                    statusMessage = "GATT 서비스 탐색 중..."
+                    statusMessage = "MTU 확장 및 GATT 서비스 탐색 중..."
                 )
                 if (hasBluetoothConnectPermission()) {
-                    gatt.discoverServices()
+                    if (!gatt.requestMtu(512)) {
+                        gatt.discoverServices()
+                    }
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 logMsg("ESP32 GATT 연결 종료 (status=$status)")
@@ -328,6 +336,14 @@ class Esp32Gateway private constructor(private val appContext: Context) {
                 if (!userInitiatedDisconnect && targetAddress.isNotEmpty()) {
                     scheduleReconnect()
                 }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            logMsg("ESP32 BLE MTU 협상 완료: mtu=$mtu (status=$status)")
+            if (hasBluetoothConnectPermission()) {
+                gatt.discoverServices()
             }
         }
 
@@ -426,21 +442,23 @@ class Esp32Gateway private constructor(private val appContext: Context) {
         var parsedImu: ImuData? = null
         var parsedBaro: BarometerData? = null
 
-        if (textStr.startsWith("{") && textStr.endsWith("}")) {
+        val jsonCandidate = extractCompleteJson(shortUuid, textStr)
+        if (jsonCandidate != null) {
             try {
-                val json = JSONObject(textStr)
+                val json = JSONObject(jsonCandidate)
                 if (json.has("imu") || json.has("accel") || json.has("ax")) {
-                    val accelObj = json.optJSONObject("accel")
-                    val gyroObj = json.optJSONObject("gyro")
-                    val ax = (accelObj?.optDouble("x") ?: json.optDouble("ax", 0.0)).toFloat()
-                    val ay = (accelObj?.optDouble("y") ?: json.optDouble("ay", 0.0)).toFloat()
-                    val az = (accelObj?.optDouble("z") ?: json.optDouble("az", 0.0)).toFloat()
+                    val imuObj = json.optJSONObject("imu") ?: json
+                    val accelObj = imuObj.optJSONObject("accel")
+                    val gyroObj = imuObj.optJSONObject("gyro")
+                    val ax = (accelObj?.optDouble("x") ?: imuObj.optDouble("ax", 0.0)).toFloat()
+                    val ay = (accelObj?.optDouble("y") ?: imuObj.optDouble("ay", 0.0)).toFloat()
+                    val az = (accelObj?.optDouble("z") ?: imuObj.optDouble("az", 0.0)).toFloat()
 
-                    val gx = (gyroObj?.optDouble("x") ?: json.optDouble("gx", 0.0)).toFloat()
-                    val gy = (gyroObj?.optDouble("y") ?: json.optDouble("gy", 0.0)).toFloat()
-                    val gz = (gyroObj?.optDouble("z") ?: json.optDouble("gz", 0.0)).toFloat()
+                    val gx = (gyroObj?.optDouble("x") ?: imuObj.optDouble("gx", 0.0)).toFloat()
+                    val gy = (gyroObj?.optDouble("y") ?: imuObj.optDouble("gy", 0.0)).toFloat()
+                    val gz = (gyroObj?.optDouble("z") ?: imuObj.optDouble("gz", 0.0)).toFloat()
 
-                    val yaw = json.optDouble("yaw", 0.0)
+                    val yaw = imuObj.optDouble("yaw", json.optDouble("yaw", 0.0))
 
                     parsedImu = ImuData(
                         accel = AccelData(ax, ay, az),
@@ -457,7 +475,7 @@ class Esp32Gateway private constructor(private val appContext: Context) {
                 }
             } catch (_: Exception) {
             }
-        } else if (textStr.contains(",")) {
+        } else if (!textStr.contains("{") && !textStr.contains("}") && textStr.contains(",")) {
             val tokens = textStr.split(",").mapNotNull { it.trim().toFloatOrNull() }
             if (tokens.size >= 6) {
                 parsedImu = ImuData(
@@ -501,6 +519,11 @@ class Esp32Gateway private constructor(private val appContext: Context) {
             updatedAt = now
         )
 
+        val hasImuNow = parsedImu != null || currentState.hasValidImu
+        val hasBaroNow = parsedBaro != null || currentState.hasValidBaro
+        val nextImuUpdatedAt = if (parsedImu != null) now else currentState.lastImuUpdatedAt
+        val nextBaroUpdatedAt = if (parsedBaro != null) now else currentState.lastBaroUpdatedAt
+
         if (!currentState.isPaused) {
             _gatewayState.value = currentState.copy(
                 packetsByChar = updatedMap,
@@ -508,8 +531,12 @@ class Esp32Gateway private constructor(private val appContext: Context) {
                 lastRawText = textStr,
                 imu = parsedImu ?: currentState.imu,
                 barometer = parsedBaro ?: currentState.barometer,
-                isDataValid = true,
+                isDataValid = hasImuNow || hasBaroNow,
+                hasValidImu = hasImuNow,
+                hasValidBaro = hasBaroNow,
                 lastUpdatedAt = now,
+                lastImuUpdatedAt = nextImuUpdatedAt,
+                lastBaroUpdatedAt = nextBaroUpdatedAt,
                 statusMessage = "ESP32 패킷 수신 중 (채널 0x$shortUuid)"
             )
         } else {
@@ -517,10 +544,56 @@ class Esp32Gateway private constructor(private val appContext: Context) {
                 packetsByChar = updatedMap,
                 imu = parsedImu ?: currentState.imu,
                 barometer = parsedBaro ?: currentState.barometer,
-                isDataValid = true,
-                lastUpdatedAt = now
+                isDataValid = hasImuNow || hasBaroNow,
+                hasValidImu = hasImuNow,
+                hasValidBaro = hasBaroNow,
+                lastUpdatedAt = now,
+                lastImuUpdatedAt = nextImuUpdatedAt,
+                lastBaroUpdatedAt = nextBaroUpdatedAt
             )
         }
+    }
+
+    private fun extractCompleteJson(charUuid: String, chunk: String): String? {
+        if (chunk.isEmpty()) return null
+        if (chunk.startsWith("{") && chunk.endsWith("}")) {
+            jsonBuffers[charUuid]?.clear()
+            return chunk
+        }
+        val buf = jsonBuffers.getOrPut(charUuid) { StringBuilder() }
+        if (chunk.contains("{") && !buf.contains("{")) {
+            val startIdx = chunk.indexOf('{')
+            buf.clear()
+            buf.append(chunk.substring(startIdx))
+        } else if (buf.isNotEmpty()) {
+            buf.append(chunk)
+        }
+        if (buf.length > 1024) {
+            buf.clear()
+            return null
+        }
+        val content = buf.toString()
+        val openIdx = content.indexOf('{')
+        if (openIdx < 0) return null
+        var depth = 0
+        for (i in openIdx until content.length) {
+            when (content[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        val complete = content.substring(openIdx, i + 1)
+                        val remaining = content.substring(i + 1)
+                        buf.clear()
+                        if (remaining.contains("{")) {
+                            buf.append(remaining.substring(remaining.indexOf('{')))
+                        }
+                        return complete
+                    }
+                }
+            }
+        }
+        return null
     }
 
     @SuppressLint("MissingPermission")
@@ -582,13 +655,13 @@ class Esp32Gateway private constructor(private val appContext: Context) {
 
     fun getLatestImu(): ImuData? {
         val state = _gatewayState.value
-        val isFresh = state.isDataValid && (System.currentTimeMillis() - state.lastUpdatedAt) < FRESHNESS_TIMEOUT_MS
+        val isFresh = state.hasValidImu && (System.currentTimeMillis() - state.lastImuUpdatedAt) < FRESHNESS_TIMEOUT_MS
         return if (isFresh) state.imu else null
     }
 
     fun getLatestBarometer(): BarometerData? {
         val state = _gatewayState.value
-        val isFresh = state.isDataValid && (System.currentTimeMillis() - state.lastUpdatedAt) < FRESHNESS_TIMEOUT_MS
+        val isFresh = state.hasValidBaro && (System.currentTimeMillis() - state.lastBaroUpdatedAt) < FRESHNESS_TIMEOUT_MS
         return if (isFresh && state.barometer.pressure > 0f) state.barometer else null
     }
 }

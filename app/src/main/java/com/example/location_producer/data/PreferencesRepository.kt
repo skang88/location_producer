@@ -13,6 +13,8 @@ class PreferencesRepository(context: Context) {
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_MIBAND_ADDRESS = "miband_address"
         private const val KEY_MIBAND_NAME = "miband_name"
+        private const val KEY_ESP32_ADDRESS = "esp32_address"
+        private const val KEY_ESP32_NAME = "esp32_name"
 
         const val DEFAULT_BROKER_URL = "ws://mqtt.gnfire.opik.net:80/"
         const val DEFAULT_DEVICE_ID = ""
@@ -42,4 +44,12 @@ class PreferencesRepository(context: Context) {
     var miBandName: String
         get() = prefs.getString(KEY_MIBAND_NAME, "") ?: ""
         set(value) = prefs.edit().putString(KEY_MIBAND_NAME, value).apply()
+
+    var esp32Address: String
+        get() = prefs.getString(KEY_ESP32_ADDRESS, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_ESP32_ADDRESS, value).apply()
+
+    var esp32Name: String
+        get() = prefs.getString(KEY_ESP32_NAME, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_ESP32_NAME, value).apply()
 }

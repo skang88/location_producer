@@ -5,6 +5,8 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import com.example.location_producer.ble.DiscoveredBleDevice
+import com.example.location_producer.ble.Esp32Gateway
+import com.example.location_producer.ble.Esp32GatewayState
 import com.example.location_producer.ble.MiBandGateway
 import com.example.location_producer.ble.MiBandGatewayState
 import com.example.location_producer.data.PreferencesRepository
@@ -19,6 +21,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = PreferencesRepository(application)
     private val miBandGateway = MiBandGateway.getInstance(application)
+    private val esp32Gateway = Esp32Gateway.getInstance(application)
 
     private val _brokerUrl = MutableStateFlow(repository.brokerUrl)
     val brokerUrl: StateFlow<String> = _brokerUrl.asStateFlow()
@@ -32,14 +35,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _miBandName = MutableStateFlow(repository.miBandName)
     val miBandName: StateFlow<String> = _miBandName.asStateFlow()
 
+    private val _esp32Address = MutableStateFlow(repository.esp32Address)
+    val esp32Address: StateFlow<String> = _esp32Address.asStateFlow()
+
+    private val _esp32Name = MutableStateFlow(repository.esp32Name)
+    val esp32Name: StateFlow<String> = _esp32Name.asStateFlow()
+
     val serviceStatus: StateFlow<ServiceStatus> = SensorStreamingService.serviceStatus
     val mqttState: StateFlow<MqttState> = SensorStreamingService.mqttState
     val miBandState: StateFlow<MiBandGatewayState> = miBandGateway.gatewayState
+    val esp32State: StateFlow<Esp32GatewayState> = esp32Gateway.gatewayState
     val discoveredDevices: StateFlow<List<DiscoveredBleDevice>> = miBandGateway.discoveredDevices
     val isScanning: StateFlow<Boolean> = miBandGateway.isScanning
 
     init {
         miBandGateway.onLog = { SensorStreamingService.addLog("[BLE] $it") }
+        esp32Gateway.onLog = { SensorStreamingService.addLog("[ESP32] $it") }
     }
 
     fun updateBrokerUrl(url: String) {
@@ -84,6 +95,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.miBandName = ""
     }
 
+    fun selectEsp32Device(device: DiscoveredBleDevice) {
+        _esp32Address.value = device.address
+        _esp32Name.value = device.name
+        repository.esp32Address = device.address
+        repository.esp32Name = device.name
+        miBandGateway.stopScan()
+    }
+
+    fun clearSelectedEsp32() {
+        esp32Gateway.disconnect()
+        _esp32Address.value = ""
+        _esp32Name.value = ""
+        repository.esp32Address = ""
+        repository.esp32Name = ""
+    }
+
     fun connectMiBand() {
         val app = getApplication<Application>()
         val address = _miBandAddress.value.trim()
@@ -96,6 +123,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnectMiBand() {
         miBandGateway.disconnect()
+    }
+
+    fun connectEsp32() {
+        val app = getApplication<Application>()
+        val address = _esp32Address.value.trim()
+        if (address.isEmpty()) {
+            Toast.makeText(app, "먼저 ESP32 기기를 선택해 주세요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        esp32Gateway.connect(address, _esp32Name.value)
+    }
+
+    fun disconnectEsp32() {
+        esp32Gateway.disconnect()
     }
 
     fun clearLogs() {
@@ -117,6 +158,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(SensorStreamingService.EXTRA_DEVICE_ID, trimmedId)
             putExtra(SensorStreamingService.EXTRA_MIBAND_ADDRESS, _miBandAddress.value.trim())
             putExtra(SensorStreamingService.EXTRA_MIBAND_NAME, _miBandName.value.trim())
+            putExtra(SensorStreamingService.EXTRA_ESP32_ADDRESS, _esp32Address.value.trim())
+            putExtra(SensorStreamingService.EXTRA_ESP32_NAME, _esp32Name.value.trim())
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             app.startForegroundService(intent)

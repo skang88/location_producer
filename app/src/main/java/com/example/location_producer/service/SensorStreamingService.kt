@@ -16,6 +16,8 @@ import androidx.core.app.NotificationCompat
 import com.example.location_producer.MainActivity
 import com.example.location_producer.R
 import com.example.location_producer.ble.BleConnectionStatus
+import com.example.location_producer.ble.Esp32Gateway
+import com.example.location_producer.ble.Esp32GatewayState
 import com.example.location_producer.ble.MiBandGateway
 import com.example.location_producer.ble.MiBandGatewayState
 import com.example.location_producer.location.GpsCollector
@@ -58,6 +60,8 @@ class SensorStreamingService : Service() {
         const val EXTRA_DEVICE_ID = "EXTRA_DEVICE_ID"
         const val EXTRA_MIBAND_ADDRESS = "EXTRA_MIBAND_ADDRESS"
         const val EXTRA_MIBAND_NAME = "EXTRA_MIBAND_NAME"
+        const val EXTRA_ESP32_ADDRESS = "EXTRA_ESP32_ADDRESS"
+        const val EXTRA_ESP32_NAME = "EXTRA_ESP32_NAME"
 
         private val _serviceStatus = MutableStateFlow(ServiceStatus())
         val serviceStatus: StateFlow<ServiceStatus> = _serviceStatus.asStateFlow()
@@ -67,6 +71,9 @@ class SensorStreamingService : Service() {
 
         private val _miBandState = MutableStateFlow(MiBandGatewayState())
         val miBandState: StateFlow<MiBandGatewayState> = _miBandState.asStateFlow()
+
+        private val _esp32State = MutableStateFlow(Esp32GatewayState())
+        val esp32State: StateFlow<Esp32GatewayState> = _esp32State.asStateFlow()
 
         fun addLog(msg: String) {
             val currentLogs = _serviceStatus.value.logs.takeLast(49).toMutableList()
@@ -87,10 +94,12 @@ class SensorStreamingService : Service() {
     private lateinit var gpsCollector: GpsCollector
     private lateinit var mqttStreamManager: MqttStreamManager
     private lateinit var miBandGateway: MiBandGateway
+    private lateinit var esp32Gateway: Esp32Gateway
 
     private var streamingJob: Job? = null
     private var sentPacketCounter: Long = 0L
     private var autoConnectedMiBand: Boolean = false
+    private var autoConnectedEsp32: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -100,12 +109,22 @@ class SensorStreamingService : Service() {
         sensorCollector = SensorCollector(this)
         gpsCollector = GpsCollector(this)
         mqttStreamManager = MqttStreamManager()
+
         miBandGateway = MiBandGateway.getInstance(applicationContext)
         miBandGateway.onLog = { addLog("[BLE] $it") }
+
+        esp32Gateway = Esp32Gateway.getInstance(applicationContext)
+        esp32Gateway.onLog = { addLog("[ESP32] $it") }
 
         serviceScope.launch {
             miBandGateway.gatewayState.collect { state ->
                 _miBandState.value = state
+            }
+        }
+
+        serviceScope.launch {
+            esp32Gateway.gatewayState.collect { state ->
+                _esp32State.value = state
             }
         }
 
@@ -131,12 +150,16 @@ class SensorStreamingService : Service() {
                 val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: ""
                 val miBandAddress = intent.getStringExtra(EXTRA_MIBAND_ADDRESS) ?: ""
                 val miBandName = intent.getStringExtra(EXTRA_MIBAND_NAME) ?: ""
+                val esp32Address = intent.getStringExtra(EXTRA_ESP32_ADDRESS) ?: ""
+                val esp32Name = intent.getStringExtra(EXTRA_ESP32_NAME) ?: ""
                 if (deviceId.isNotEmpty()) {
                     startStreamingService(
                         brokerUrl = brokerUrl,
                         deviceId = deviceId,
                         miBandAddress = miBandAddress,
-                        miBandName = miBandName
+                        miBandName = miBandName,
+                        esp32Address = esp32Address,
+                        esp32Name = esp32Name
                     )
                 }
             }
@@ -152,7 +175,9 @@ class SensorStreamingService : Service() {
         brokerUrl: String,
         deviceId: String,
         miBandAddress: String = "",
-        miBandName: String = ""
+        miBandName: String = "",
+        esp32Address: String = "",
+        esp32Name: String = ""
     ) {
         val notification = buildNotification("Initializing streaming service...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -188,6 +213,19 @@ class SensorStreamingService : Service() {
             autoConnectedMiBand = false
         }
 
+        if (esp32Address.isNotBlank() && esp32Gateway.hasBluetoothConnectPermission()) {
+            val currentEsp = esp32Gateway.gatewayState.value
+            val alreadyActiveForTarget = currentEsp.deviceAddress == esp32Address &&
+                (currentEsp.status == BleConnectionStatus.CONNECTING ||
+                    currentEsp.status == BleConnectionStatus.CONNECTED_STREAMING)
+            if (!alreadyActiveForTarget) {
+                esp32Gateway.connect(esp32Address, esp32Name)
+            }
+            autoConnectedEsp32 = true
+        } else {
+            autoConnectedEsp32 = false
+        }
+
         sentPacketCounter = 0L
         _serviceStatus.value = ServiceStatus(
             isRunning = true,
@@ -215,8 +253,13 @@ class SensorStreamingService : Service() {
 
             // Sensor streaming loop running at ~20ms - 50ms interval (20Hz - 50Hz)
             while (isActive) {
-                val imu = sensorCollector.getLatestImu()
-                val barometer = sensorCollector.getLatestBarometer()
+                val phoneImu = sensorCollector.getLatestImu()
+                val phoneBaro = sensorCollector.getLatestBarometer()
+                val esp32Imu = esp32Gateway.getLatestImu()
+                val esp32Baro = esp32Gateway.getLatestBarometer()
+
+                val imu = esp32Imu ?: phoneImu
+                val barometer = esp32Baro ?: phoneBaro
                 val gps = gpsCollector.getLatestGps()
                 val vitals = miBandGateway.getLatestVitals()
 
@@ -268,10 +311,15 @@ class SensorStreamingService : Service() {
         sensorCollector.stop()
         gpsCollector.stopLocationUpdates()
         mqttStreamManager.disconnect()
+
         if (autoConnectedMiBand || miBandGateway.gatewayState.value.status != BleConnectionStatus.DISCONNECTED) {
             miBandGateway.disconnect()
         }
+        if (autoConnectedEsp32 || esp32Gateway.gatewayState.value.status != BleConnectionStatus.DISCONNECTED) {
+            esp32Gateway.disconnect()
+        }
         autoConnectedMiBand = false
+        autoConnectedEsp32 = false
 
         releaseWakeLock()
 

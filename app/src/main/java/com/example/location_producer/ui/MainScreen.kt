@@ -72,6 +72,11 @@ fun MainScreen(
     val miBandAddress by viewModel.miBandAddress.collectAsState()
     val miBandName by viewModel.miBandName.collectAsState()
     val miBandState by viewModel.miBandState.collectAsState()
+
+    val esp32Address by viewModel.esp32Address.collectAsState()
+    val esp32Name by viewModel.esp32Name.collectAsState()
+    val esp32State by viewModel.esp32State.collectAsState()
+
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
 
@@ -229,7 +234,7 @@ fun MainScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Mi Band BLE Gateway (Vitals)",
+                                text = "Mi Band BLE Gateway (Heart Rate)",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -283,7 +288,7 @@ fun MainScreen(
                                     "${miBandName.ifBlank { "Mi Band" }} ($miBandAddress)"
                                 }
                                 Text(
-                                    text = "Target: $selectedSummary",
+                                    text = "Target Mi Band: $selectedSummary",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.weight(1f)
@@ -347,7 +352,7 @@ fun MainScreen(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(max = 180.dp)
+                                    .heightIn(max = 200.dp)
                                     .background(
                                         MaterialTheme.colorScheme.surface,
                                         RoundedCornerShape(8.dp)
@@ -364,22 +369,20 @@ fun MainScreen(
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     items(discoveredDevices, key = { it.address }) { dev ->
-                                        val isSelected = dev.address == miBandAddress
+                                        val isMiSelected = dev.address == miBandAddress
+                                        val isEspSelected = dev.address == esp32Address
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(6.dp))
                                                 .background(
-                                                    if (isSelected) {
-                                                        MaterialTheme.colorScheme.primaryContainer
-                                                    } else {
-                                                        MaterialTheme.colorScheme.surfaceVariant
+                                                    when {
+                                                        isMiSelected -> MaterialTheme.colorScheme.primaryContainer
+                                                        isEspSelected -> MaterialTheme.colorScheme.tertiaryContainer
+                                                        else -> MaterialTheme.colorScheme.surfaceVariant
                                                     }
                                                 )
-                                                .clickable(enabled = !serviceStatus.isRunning) {
-                                                    viewModel.selectMiBandDevice(dev)
-                                                }
-                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
@@ -392,20 +395,28 @@ fun MainScreen(
                                                 Text(
                                                     text = dev.address,
                                                     fontFamily = FontFamily.Monospace,
-                                                    fontSize = 12.sp
+                                                    fontSize = 11.sp
                                                 )
                                             }
-                                            val tagParts = buildList {
-                                                if (dev.isBonded) add("Paired")
-                                                dev.rssi?.let { add("${it} dBm") }
-                                            }.joinToString(" · ")
-                                            if (tagParts.isNotEmpty()) {
-                                                Text(
-                                                    text = tagParts,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    fontWeight = FontWeight.Bold
-                                                )
+
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                OutlinedButton(
+                                                    onClick = { viewModel.selectMiBandDevice(dev) },
+                                                    enabled = !serviceStatus.isRunning,
+                                                    modifier = Modifier.height(32.dp)
+                                                ) {
+                                                    Text("MiBand", fontSize = 10.sp)
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { viewModel.selectEsp32Device(dev) },
+                                                    enabled = !serviceStatus.isRunning,
+                                                    modifier = Modifier.height(32.dp)
+                                                ) {
+                                                    Text("ESP32", fontSize = 10.sp)
+                                                }
                                             }
                                         }
                                     }
@@ -475,6 +486,143 @@ fun MainScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Connect Mi Band")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ESP32 BLE Gateway (ZUPT / PDR Sniffer) Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        val (espLabel, isEspActive) = when (esp32State.status) {
+                            BleConnectionStatus.CONNECTED_STREAMING -> "ESP32 Streaming" to true
+                            BleConnectionStatus.CONNECTING -> "ESP32 Connecting" to false
+                            BleConnectionStatus.ERROR -> "ESP32 Error" to false
+                            BleConnectionStatus.DISCONNECTED -> "ESP32 Disconnected" to false
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "ESP32 BLE Gateway (ZUPT/PDR)",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            StatusBadge(label = espLabel, isActive = isEspActive)
+                        }
+
+                        // Target ESP32 Device
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val espSummary = if (esp32Address.isBlank()) {
+                                    "Not selected (Select 'ESP32' from device list)"
+                                } else {
+                                    "${esp32Name.ifBlank { "ESP32" }} ($esp32Address)"
+                                }
+                                Text(
+                                    text = "Target ESP32: $espSummary",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (esp32Address.isNotBlank() && !serviceStatus.isRunning) {
+                                    TextButton(onClick = { viewModel.clearSelectedEsp32() }) {
+                                        Text("Clear")
+                                    }
+                                }
+                            }
+
+                            esp32State.statusMessage?.let { msg ->
+                                Text(
+                                    text = msg,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (esp32State.status == BleConnectionStatus.ERROR) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            }
+                        }
+
+                        // Live Packet Sniffer Inspection Box
+                        if (esp32State.lastRawText.isNotEmpty() || esp32State.lastRawHex.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "📡 ESP32 BLE Packet Sniffer (Live Inspection)",
+                                    color = Color.Yellow,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                if (esp32State.lastRawText.isNotEmpty()) {
+                                    Text(
+                                        text = "Text: ${esp32State.lastRawText}",
+                                        color = Color.Green,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                if (esp32State.lastRawHex.isNotEmpty()) {
+                                    Text(
+                                        text = "Hex : ${esp32State.lastRawHex}",
+                                        color = Color.Cyan,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        // Connect / Disconnect ESP32
+                        val isEspBusyOrConnected = esp32State.status == BleConnectionStatus.CONNECTING ||
+                            esp32State.status == BleConnectionStatus.CONNECTED_STREAMING
+
+                        if (isEspBusyOrConnected) {
+                            OutlinedButton(
+                                onClick = { viewModel.disconnectEsp32() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Disconnect ESP32")
+                            }
+                        } else {
+                            Button(
+                                onClick = { viewModel.connectEsp32() },
+                                enabled = hasBluetoothPermission && esp32Address.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Connect ESP32 (Start Packet Sniffer)")
                             }
                         }
                     }
@@ -625,10 +773,12 @@ fun MainScreen(
                                 )
                                 .padding(12.dp)
                         ) {
+                            val isEsp32Source = esp32State.isDataValid
                             Text(
-                                text = "IMU Sensors (~50Hz)",
+                                text = if (isEsp32Source) "IMU Sensors (~50Hz - ESP32 Foot Module)" else "IMU Sensors (~50Hz - Phone Internal)",
                                 fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isEsp32Source) Color(0xFF1976D2) else MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -673,7 +823,7 @@ fun MainScreen(
                             )
                         }
 
-                        // Vitals Section (Heart Rate & SpO2)
+                        // Vitals Section (Heart Rate)
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()

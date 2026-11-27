@@ -136,12 +136,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _isFetchingZeppKey.value = false
                 result.fold(
                     onSuccess = { devices ->
-                        val targetAddress = _miBandAddress.value.trim()
-                        val matched = if (targetAddress.isNotEmpty()) {
-                            devices.firstOrNull { it.mac.equals(targetAddress, ignoreCase = true) }
-                                ?: devices.first()
+                        val currentTarget = _miBandAddress.value.trim()
+                        val matched = if (currentTarget.isNotEmpty()) {
+                            devices.firstOrNull { it.mac.equals(currentTarget, ignoreCase = true) }
+                                ?: devices.last()
                         } else {
-                            devices.first()
+                            devices.last()
                         }
 
                         updateMiBandAuthKey(matched.authKey)
@@ -150,7 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         repository.miBandAddress = matched.mac
                         repository.miBandName = matched.deviceName
 
-                        val msg = "Zepp Cloud에서 Auth Key 수신 성공! (${matched.deviceName})"
+                        val msg = "Zepp Cloud Auth Key 동기화 완료: ${matched.deviceName} (${matched.mac})"
                         SensorStreamingService.addLog("[Zepp Cloud] $msg")
                         Toast.makeText(app, msg, Toast.LENGTH_LONG).show()
                     },

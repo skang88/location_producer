@@ -65,6 +65,9 @@ bool bmi160Ready = false;
 uint8_t bmp388Addr = 0;
 bool bmp388Ready = false;
 
+int activeSda = -1;
+int activeScl = -1;
+
 // BMP388 floating-point calibration coefficients
 struct Bmp388Calib {
   double t1, t2, t3;
@@ -296,15 +299,62 @@ float readBMP388PressureHpa() {
   return (float)(comp_press_pa / 100.0); // Pa -> hPa
 }
 
+void autoDetectI2CPins() {
+  // Safe GPIO candidates for ESP32-C6 (avoiding USB D-/D+ pins 12, 13)
+  const int candidates[][2] = {
+    {SDA, SCL},
+    {6, 7}, {7, 6},
+    {4, 5}, {5, 4},
+    {21, 22}, {22, 21},
+    {18, 19}, {19, 18},
+    {2, 3}, {3, 2},
+    {8, 9}, {9, 8},
+    {10, 11}, {11, 10},
+    {20, 21}, {22, 23}
+  };
+  const int numCandidates = sizeof(candidates) / sizeof(candidates[0]);
+
+  for (int i = 0; i < numCandidates; i++) {
+    int sda = candidates[i][0];
+    int scl = candidates[i][1];
+    if (sda == 12 || sda == 13 || scl == 12 || scl == 13) continue;
+
+    Wire.end();
+    Wire.begin(sda, scl);
+    Wire.setClock(100000);
+    delay(10);
+
+    bool foundImu = (i2cReadByte(0x68, BMI160_REG_CHIP_ID) == BMI160_CHIP_ID_VAL) ||
+                    (i2cReadByte(0x69, BMI160_REG_CHIP_ID) == BMI160_CHIP_ID_VAL);
+    uint8_t bmpId76 = i2cReadByte(0x76, BMP388_REG_CHIP_ID);
+    uint8_t bmpId77 = i2cReadByte(0x77, BMP388_REG_CHIP_ID);
+    bool foundBmp = (bmpId76 == 0x50 || bmpId76 == 0x60 || bmpId77 == 0x50 || bmpId77 == 0x60);
+
+    if (foundImu || foundBmp) {
+      activeSda = sda;
+      activeScl = scl;
+      Serial.printf("[OK] Auto-detected I2C pins: SDA=%d, SCL=%d (BMI160=%d, BMP388=%d)\n",
+                    sda, scl, foundImu, foundBmp);
+      return;
+    }
+  }
+
+  // Fallback to default pins
+  Wire.end();
+  Wire.begin();
+  Wire.setClock(100000);
+  Serial.println("[WARN] Could not auto-detect BMI160/BMP388 on candidate I2C pins.");
+}
+
 void setup() {
   Serial.begin(115200);
-  Wire.begin(); // Default ESP32 I2C: SDA=21, SCL=22 (change to Wire.begin(SDA, SCL) if custom pins)
-  Wire.setClock(400000);
+  delay(500);
 
   Serial.println("==================================================");
-  Serial.println(" ESP32 ZUPT/PDR BLE Sensor Node (BMI160 + BMP388) ");
+  Serial.println(" ESP32-C6 ZUPT/PDR BLE Sensor (BMI160 + BMP388)   ");
   Serial.println("==================================================");
 
+  autoDetectI2CPins();
   bmi160Ready = initBMI160();
   calibrateGyroBias();
   bmp388Ready = initBMP388();
@@ -360,13 +410,13 @@ void loop() {
     char payload[256];
     if (pressure > 300.0f) {
       snprintf(payload, sizeof(payload),
-        "{\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},\"gyro\":{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f},\"barometer\":{\"pressure\":%.2f}}",
-        ax, ay, az, gx, gy, gz, pressure
+        "{\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},\"gyro\":{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f},\"barometer\":{\"pressure\":%.2f},\"i2c\":[%d,%d]}",
+        ax, ay, az, gx, gy, gz, pressure, activeSda, activeScl
       );
     } else {
       snprintf(payload, sizeof(payload),
-        "{\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},\"gyro\":{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}}",
-        ax, ay, az, gx, gy, gz
+        "{\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},\"gyro\":{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f},\"i2c\":[%d,%d]}",
+        ax, ay, az, gx, gy, gz, activeSda, activeScl
       );
     }
 

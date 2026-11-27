@@ -3,7 +3,7 @@ package com.example.location_producer.ble
 import java.util.UUID
 
 /**
- * Pure Kotlin BLE helper for Smart Bands (Standard BLE Heart Rate 0x180D + Pulse Oximeter 0x1822).
+ * Pure Kotlin BLE helper for Smart Bands (Standard BLE Heart Rate 0x180D + Pulse Oximeter 0x1822 & Huami Vitals).
  */
 object MiBandProtocol {
 
@@ -15,6 +15,9 @@ object MiBandProtocol {
     val CHAR_PLX_SPOT_CHECK_MEASUREMENT: UUID = UUID.fromString("00002a5e-0000-1000-8000-00805f9b34fb")
 
     val DESCRIPTOR_CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+    fun bytesToHex(bytes: ByteArray): String =
+        bytes.joinToString(" ") { String.format("%02X", it) }
 
     fun parseHeartRateMeasurement(bytes: ByteArray): Int? {
         if (bytes.size < 2) return null
@@ -29,8 +32,15 @@ object MiBandProtocol {
     }
 
     fun parseSpO2Measurement(bytes: ByteArray): Int? {
-        if (bytes.size < 3) return null
-        val spo2 = bytes[2].toInt() and 0xFF
-        return if (spo2 in 70..100) spo2 else null
+        if (bytes.isEmpty()) return null
+        if (bytes.size >= 3) {
+            val valAtIdx2 = bytes[2].toInt() and 0xFF
+            if (valAtIdx2 in 70..100) return valAtIdx2
+        }
+        for (b in bytes) {
+            val v = b.toInt() and 0xFF
+            if (v in 70..100) return v
+        }
+        return null
     }
 }

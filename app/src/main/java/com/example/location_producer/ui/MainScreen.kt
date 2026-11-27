@@ -533,12 +533,24 @@ fun MainScreen(
                                 Text("Disconnect Mi Band")
                             }
                         } else {
-                            Button(
-                                onClick = { viewModel.connectMiBand() },
-                                enabled = hasBluetoothPermission && miBandAddress.isNotBlank() && isAuthKeyValid,
-                                modifier = Modifier.fillMaxWidth()
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text("Connect Mi Band")
+                                Button(
+                                    onClick = { viewModel.connectMiBand() },
+                                    enabled = hasBluetoothPermission && miBandAddress.isNotBlank() && isAuthKeyValid,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Connect")
+                                }
+                                OutlinedButton(
+                                    onClick = { viewModel.pairMiBand() },
+                                    enabled = hasBluetoothPermission && miBandAddress.isNotBlank() && isAuthKeyValid,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Pair/Bind (0x01)")
+                                }
                             }
                         }
                     }

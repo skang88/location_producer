@@ -181,6 +181,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         miBandGateway.connect(address, _miBandName.value, authKey)
     }
 
+    fun pairMiBand() {
+        val app = getApplication<Application>()
+        val address = _miBandAddress.value.trim()
+        if (address.isEmpty()) {
+            Toast.makeText(app, "먼저 Mi Band 기기를 선택해 주세요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val authKey = _miBandAuthKey.value.trim()
+        if (!MiBandProtocol.isValidAuthKeyInput(authKey)) {
+            Toast.makeText(app, "Auth Key는 비워두거나 32자리 hex여야 합니다.", Toast.LENGTH_LONG).show()
+            return
+        }
+        miBandGateway.connect(address, _miBandName.value, authKey, forcePairFirst = true)
+    }
+
     fun disconnectMiBand() {
         miBandGateway.disconnect()
     }

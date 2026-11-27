@@ -141,6 +141,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
     private var targetName: String = ""
     private var targetAuthKeyHex: String = ""
     private var activeAuthKeyBytes: ByteArray? = null
+    private var forcePairingFirst = false
 
     private var currentAuthFlag: Byte = MiBandProtocol.AUTH_FLAG_DEFAULT
     private var activeUseCryptFlag = false
@@ -336,7 +337,12 @@ class MiBandGateway private constructor(private val appContext: Context) {
         return lower.contains("mi smart band") || lower.contains("mi band") || lower.contains("smart band")
     }
 
-    fun connect(address: String, name: String = "", authKeyHex: String = "") {
+    fun connect(
+        address: String,
+        name: String = "",
+        authKeyHex: String = "",
+        forcePairFirst: Boolean = false
+    ) {
         val cleanAddress = address.trim()
         if (cleanAddress.isEmpty()) {
             _gatewayState.value = MiBandGatewayState(
@@ -390,6 +396,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
         targetName = name.ifBlank { cleanAddress }
         targetAuthKeyHex = authKeyHex
         activeAuthKeyBytes = parsedKey
+        forcePairingFirst = forcePairFirst
         userInitiatedDisconnect = false
         authFailed = false
         reconnectAttempt = 0
@@ -412,7 +419,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
             isHrValid = false,
             statusMessage = "BLE 연결 중... ($targetName)"
         )
-        logMsg("연결 시도: $targetName ($targetAddress), mode=$mode")
+        logMsg("연결 시도: $targetName ($targetAddress), mode=$mode, pairFirst=$forcePairingFirst")
 
         try {
             val device = adapter.getRemoteDevice(targetAddress)
@@ -660,9 +667,21 @@ class MiBandGateway private constructor(private val appContext: Context) {
             mode = BleAuthMode.MI_BAND_AUTH,
             statusMessage = "Mi Band Auth 인증 중..."
         )
-        logMsg("Mi Band 6 AES 인증 시작")
+        logMsg("Mi Band 6 AES 인증 시작 (forcePairFirst=$forcePairingFirst)")
 
         enableNotification(gatt, authChar)
+
+        if (forcePairingFirst && activeAuthKeyBytes != null) {
+            val sendKeyPayload = MiBandProtocol.buildSendKeyRequest(activeAuthKeyBytes!!)
+            logMsg("직접 페어링(0x01) 요청 발송 — 밴드 화면의 '페어링 승인(✔)' 터치 필요!")
+            _gatewayState.value = _gatewayState.value.copy(
+                statusMessage = "밴드 화면의 '페어링 승인(✔)' 알림을 터치해 주세요!"
+            )
+            enqueueGattOperation {
+                writeCharacteristicRaw(gatt, authChar, sendKeyPayload)
+            }
+            return
+        }
 
         authJob?.cancel()
         authJob = scope.launch {
@@ -726,6 +745,16 @@ class MiBandGateway private constructor(private val appContext: Context) {
         logMsg("Auth RX: ${MiBandProtocol.bytesToHex(value)}")
         val parsed = MiBandProtocol.parseAuthNotification(value)
         when (parsed) {
+            is MiBandProtocol.AuthNotification.PairSuccess -> {
+                logMsg("밴드 직접 페어링(0x01) 승인 수신! — AES 챌린지 인증 계속 진행")
+                _gatewayState.value = _gatewayState.value.copy(
+                    statusMessage = "밴드 승인 완료 — AES 챌린지 인증 중..."
+                )
+                val payload = MiBandProtocol.buildRequestRandomChallenge(currentAuthFlag, activeUseCryptFlag)
+                enqueueGattOperation {
+                    writeCharacteristicRaw(gatt, authChar, payload)
+                }
+            }
             is MiBandProtocol.AuthNotification.Challenge -> {
                 challengeReceived = true
                 triedFallbackResp = false
@@ -776,7 +805,7 @@ class MiBandGateway private constructor(private val appContext: Context) {
 
                 authJob?.cancel()
                 authFailed = true
-                val msg = "Mi Band 인증 실패 (cmd=0x$cmdHex, status=0x$statusHex). Zepp Life 앱을 [강제 중지] 후 다시 시도해보세요."
+                val msg = "Mi Band 인증 실패 (cmd=0x$cmdHex, status=0x$statusHex). 'Pair/Bind Mi Band'를 시도해보세요."
                 logMsg(msg)
                 _gatewayState.value = _gatewayState.value.copy(
                     status = BleConnectionStatus.ERROR,

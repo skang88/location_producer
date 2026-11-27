@@ -40,6 +40,7 @@ object MiBandProtocol {
             override fun hashCode(): Int = 31 * random16.contentHashCode() + command.hashCode()
         }
 
+        data object PairSuccess : AuthNotification()
         data object AuthSuccess : AuthNotification()
         data class AuthFailure(val command: Byte, val status: Byte) : AuthNotification()
         data class Unknown(val raw: ByteArray) : AuthNotification() {
@@ -80,6 +81,15 @@ object MiBandProtocol {
         return input.isBlank() || parseAuthKeyHex(input) != null
     }
 
+    fun buildSendKeyRequest(
+        authKey16: ByteArray,
+        authFlag: Byte = AUTH_FLAG_DEFAULT,
+        useCryptFlag: Boolean = false
+    ): ByteArray {
+        val cmd = if (useCryptFlag) 0x81.toByte() else 0x01.toByte()
+        return byteArrayOf(cmd, authFlag) + authKey16
+    }
+
     fun buildRequestRandomChallenge(
         authFlag: Byte = AUTH_FLAG_DEFAULT,
         useCryptFlag: Boolean = false,
@@ -116,6 +126,9 @@ object MiBandProtocol {
         if (bytes.size >= 3 && bytes[0] == 0x10.toByte()) {
             val cmd = bytes[1]
             val status = bytes[2]
+            if ((cmd == 0x01.toByte() || cmd == 0x81.toByte()) && status == 0x01.toByte()) {
+                return AuthNotification.PairSuccess
+            }
             if ((cmd == 0x02.toByte() || cmd == 0x82.toByte()) &&
                 status == 0x01.toByte() &&
                 bytes.size >= 19

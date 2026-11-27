@@ -10,6 +10,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.UUID
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 data class ZeppDeviceInfo(
     val mac: String,
@@ -20,8 +24,10 @@ data class ZeppDeviceInfo(
 object HuamiCloudClient {
 
     private const val TAG = "HuamiCloudClient"
-    private const val USER_AGENT =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+    private const val USER_AGENT = "Zepp/9.12.5 (Pixel 4; Android 12; Density/2.75)"
+
+    private val ZEPP_KEY = "xeNtBVqzDc6tuNTh".toByteArray(Charsets.UTF_8)
+    private val ZEPP_IV = "MAAAYAAAAAAAAABg".toByteArray(Charsets.UTF_8)
 
     private fun log(msg: String) {
         Log.d(TAG, msg)
@@ -31,22 +37,22 @@ object HuamiCloudClient {
     fun fetchAuthKeys(emailOrPhone: String, password: String): Result<List<ZeppDeviceInfo>> {
         return try {
             log("1/3 Zepp 계정 로그인 시도중: $emailOrPhone")
-            val accessToken = loginAccount(emailOrPhone, password)
+            val accessToken = getAccessToken(emailOrPhone, password)
             log("1/3 로그인 성공! Access Token 획득")
 
-            log("2/3 App Token 발급 시도중...")
-            val appToken = getAppToken(accessToken)
-            log("2/3 App Token 발급 성공!")
+            log("2/3 App Token 및 User ID 발급 시도중...")
+            val (appToken, userId) = getAppTokenAndUserId(accessToken)
+            log("2/3 App Token 발급 성공! (User ID: $userId)")
 
-            log("3/3 등록된 기기 목록 조회중...")
-            val devices = getUserDevices(appToken)
-            log("3/3 총 ${devices.size}개 기기 정보 조회됨")
+            log("3/3 등록된 기기 및 Auth Key 조회중...")
+            val devices = getUserDevices(appToken, userId)
+            log("3/3 총 ${devices.size}개 기기 정보 조회 완료")
 
             if (devices.isEmpty()) {
                 Result.failure(Exception("Zepp 계정에 등록된 기기(Mi Band)가 없습니다."))
             } else {
                 for (dev in devices) {
-                    log("  - 기기: ${dev.deviceName} (${dev.mac}), AuthKey: ${dev.authKey.take(6)}...")
+                    log("  - 기기: ${dev.deviceName} (${dev.mac}), AuthKey: ${dev.authKey}")
                 }
                 Result.success(devices)
             }
@@ -57,27 +63,93 @@ object HuamiCloudClient {
         }
     }
 
-    private fun loginAccount(emailOrPhone: String, password: String): String {
-        val loginUrl = "https://account.huami.com/v2/client/login"
-        val params = mapOf(
-            "emailOrPhone" to emailOrPhone,
-            "password" to password,
-            "state" to "REDIRECTION",
-            "client_id" to "HuaMi",
-            "redirect_uri" to "https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html",
-            "region" to "us-west-2",
-            "token" to "access",
-            "country_code" to "US"
-        )
+    private fun encryptZeppPayload(data: String): ByteArray {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        val keySpec = SecretKeySpec(ZEPP_KEY, "AES")
+        val ivSpec = IvParameterSpec(ZEPP_IV)
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
+        return cipher.doFinal(data.toByteArray(Charsets.UTF_8))
+    }
 
-        val postData = buildFormUrlEncoded(params) + "&token=refresh"
-        val url = URL(loginUrl)
-        val conn = (url.openConnection() as HttpURLConnection).apply {
+    private fun getAccessToken(emailOrPhone: String, password: String): String {
+        val urlStr = "https://api-user-us2.zepp.com/v2/registrations/tokens"
+        val payloadStr = "emailOrPhone=${encode(emailOrPhone)}&state=REDIRECTION&client_id=HuaMi&password=${encode(password)}&redirect_uri=${encode("https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html")}&region=us-west-2&token=access&token=refresh&country_code=US"
+
+        val encryptedPayload = encryptZeppPayload(payloadStr)
+
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             instanceFollowRedirects = false
             doOutput = true
-            setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("app_name", "com.huami.midong")
+            setRequestProperty("appname", "com.huami.midong")
+            setRequestProperty("cv", "151689_9.12.5")
+            setRequestProperty("v", "2.0")
+            setRequestProperty("appplatform", "android_phone")
+            setRequestProperty("vb", "202509151347")
+            setRequestProperty("vn", "9.12.5")
+            setRequestProperty("user-agent", USER_AGENT)
+            setRequestProperty("x-hm-ekv", "1")
+            setRequestProperty("content-type", "application/x-www-form-urlencoded; charset=UTF-8")
+            connectTimeout = 10000
+            readTimeout = 10000
+        }
+
+        conn.outputStream.use { os ->
+            os.write(encryptedPayload)
+        }
+
+        val responseCode = conn.responseCode
+        val redirectUrl = conn.getHeaderField("Location") ?: ""
+
+        if (responseCode !in 200..303) {
+            val errText = conn.errorStream?.use { readStream(it) } ?: ""
+            throw Exception("로그인 HTTP $responseCode 오류: $errText")
+        }
+
+        var accessToken = parseUrlParam(redirectUrl, "access")
+        if (accessToken.isEmpty()) {
+            val match = Regex("[?&]access=([^&]+)").find(redirectUrl)
+            if (match != null) {
+                accessToken = URLDecoder.decode(match.groupValues[1], "UTF-8")
+            }
+        }
+
+        if (accessToken.isEmpty()) {
+            throw Exception("Zepp 로그인 실패: 아이디 또는 비밀번호를 확인해 주세요. (Location: $redirectUrl)")
+        }
+
+        return accessToken
+    }
+
+    private fun getAppTokenAndUserId(accessToken: String): Pair<String, String> {
+        val loginUrl = "https://api-mifit-us2.zepp.com/v2/client/login"
+        val params = mapOf(
+            "code" to accessToken,
+            "device_id" to UUID.randomUUID().toString(),
+            "device_model" to "android_phone",
+            "app_version" to "9.12.5",
+            "dn" to "api-mifit.zepp.com,api-user.zepp.com,api-mifit.zepp.com,api-watch.zepp.com,app-analytics.zepp.com,auth.zepp.com,api-analytics.zepp.com",
+            "third_name" to "huami",
+            "source" to "com.huami.watch.hmwatchmanager:9.12.5:151689",
+            "app_name" to "com.huami.midong",
+            "country_code" to "US",
+            "grant_type" to "access_token",
+            "allow_registration" to "false",
+            "lang" to "en",
+            "countryState" to "US-NY"
+        )
+
+        val postData = buildFormUrlEncoded(params)
+        val conn = (URL(loginUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("app_name", "com.huami.webapp")
+            setRequestProperty("appname", "com.huami.webapp")
+            setRequestProperty("origin", "https://user.zepp.com")
+            setRequestProperty("referer", "https://user.zepp.com/")
+            setRequestProperty("user-agent", USER_AGENT)
+            setRequestProperty("content-type", "application/x-www-form-urlencoded; charset=UTF-8")
             connectTimeout = 10000
             readTimeout = 10000
         }
@@ -86,97 +158,25 @@ object HuamiCloudClient {
             os.write(postData.toByteArray(Charsets.UTF_8))
         }
 
-        val responseCode = conn.responseCode
-        val redirectUrl = conn.getHeaderField("Location") ?: ""
+        val responseText = conn.inputStream.use { readStream(it) }
+        val json = JSONObject(responseText)
 
-        val responseText = if (responseCode in 200..302) {
-            conn.inputStream?.use { readStream(it) } ?: ""
-        } else {
-            conn.errorStream?.use { readStream(it) } ?: ""
-        }
+        val tokenInfo = json.optJSONObject("token_info")
+            ?: throw Exception("Zepp App Token 파싱 실패: $responseText")
 
-        log("로그인 응답 코드: $responseCode")
+        val appToken = tokenInfo.getString("app_token")
+        val userId = tokenInfo.getString("user_id")
 
-        var accessToken = parseUrlParam(redirectUrl, "access")
-
-        if (accessToken.isEmpty() && redirectUrl.contains("access=")) {
-            val match = Regex("[?&]access=([^&]+)").find(redirectUrl)
-            if (match != null) {
-                accessToken = URLDecoder.decode(match.groupValues[1], "UTF-8")
-            }
-        }
-
-        if (accessToken.isEmpty() && responseText.isNotEmpty()) {
-            try {
-                val json = JSONObject(responseText)
-                if (json.has("access")) accessToken = json.getString("access")
-                if (accessToken.isEmpty() && json.has("access_token")) accessToken = json.getString("access_token")
-            } catch (_: Exception) {
-            }
-        }
-
-        if (accessToken.isEmpty()) {
-            val details = if (responseText.isNotBlank()) responseText else redirectUrl
-            throw Exception("Zepp 로그인 실패 (응답: $details)")
-        }
-
-        return accessToken
+        return Pair(appToken, userId)
     }
 
-    private fun getAppToken(accessToken: String): String {
-        val endpoints = listOf(
-            "https://account.huami.com/v1/client/login",
-            "https://api-mifit.huami.com/v1/client/login"
-        )
-
-        var lastException: Exception? = null
-
-        for (endpoint in endpoints) {
-            try {
-                val params = mapOf(
-                    "grant_type" to "access_token",
-                    "app_name" to "com.huami.midong",
-                    "code" to accessToken,
-                    "code_type" to "access_token",
-                    "country_code" to "US",
-                    "dn" to "api-mifit.huami.com,account.huami.com,app-analytics.huami.com"
-                )
-
-                val postData = buildFormUrlEncoded(params)
-                val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                    setRequestProperty("User-Agent", USER_AGENT)
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                }
-
-                conn.outputStream.use { os ->
-                    os.write(postData.toByteArray(Charsets.UTF_8))
-                }
-
-                val responseText = conn.inputStream.use { readStream(it) }
-                val json = JSONObject(responseText)
-
-                val tokenInfo = json.optJSONObject("token_info")
-                if (tokenInfo != null && tokenInfo.has("app_token")) {
-                    return tokenInfo.getString("app_token")
-                }
-            } catch (e: Exception) {
-                lastException = e
-            }
-        }
-
-        throw lastException ?: Exception("App Token 발급 실패")
-    }
-
-    private fun getUserDevices(appToken: String): List<ZeppDeviceInfo> {
-        val urlStr = "https://api-mifit.huami.com/v1/user/devices?enable_mac=true"
+    private fun getUserDevices(appToken: String, userId: String): List<ZeppDeviceInfo> {
+        val urlStr = "https://api-mifit.zepp.com/users/$userId/devices?channel=a100900101016&country=US&cv=151689_9.12.5&device=android_32&device_type=android_phone&enableMultiDevice=true&lang=en_US&v=2.0&r=1&r=2&userid=$userId&appid=123"
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("appname", "com.huami.midong")
             setRequestProperty("apptoken", appToken)
+            setRequestProperty("user-agent", USER_AGENT)
             connectTimeout = 10000
             readTimeout = 10000
         }
@@ -189,11 +189,12 @@ object HuamiCloudClient {
 
         for (i in 0 until items.length()) {
             val item = items.getJSONObject(i)
-            val mac = item.optString("mac", "").uppercase()
-            val addInfoStr = item.optString("additional_info", "")
+            val mac = if (item.has("macAddress")) item.optString("macAddress", "") else item.optString("mac", "")
+            val cleanMac = mac.uppercase()
 
+            val addInfoStr = if (item.has("additionalInfo")) item.optString("additionalInfo", "") else item.optString("additional_info", "")
             var authKey = ""
-            val deviceName = item.optString("device_name", "Mi Band")
+            val deviceName = item.optString("displayName", item.optString("device_name", "Mi Smart Band 6"))
 
             if (addInfoStr.isNotEmpty()) {
                 try {
@@ -215,9 +216,9 @@ object HuamiCloudClient {
             if (authKey.isNotBlank()) {
                 result.add(
                     ZeppDeviceInfo(
-                        mac = mac,
+                        mac = cleanMac,
                         authKey = authKey,
-                        deviceName = deviceName
+                        deviceName = if (deviceName.isBlank()) "Mi Smart Band 6" else deviceName
                     )
                 )
             }
@@ -226,9 +227,11 @@ object HuamiCloudClient {
         return result
     }
 
+    private fun encode(s: String): String = URLEncoder.encode(s, "UTF-8")
+
     private fun buildFormUrlEncoded(params: Map<String, String>): String {
         return params.entries.joinToString("&") { (k, v) ->
-            "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
+            "${encode(k)}=${encode(v)}"
         }
     }
 

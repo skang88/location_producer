@@ -920,17 +920,31 @@ class MiBandGateway private constructor(private val appContext: Context) {
         value: ByteArray
     ): Boolean {
         if (!hasBluetoothConnectPermission()) return false
+
+        val writeType = if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        }
+
         characteristic.value = value
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        characteristic.writeType = writeType
+
+        val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             gatt.writeCharacteristic(
                 characteristic,
                 value,
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                writeType
             ) == BluetoothStatusCodes.SUCCESS
         } else {
             gatt.writeCharacteristic(characteristic)
         }
+
+        if (success && writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
+            onGattOperationComplete()
+        }
+
+        return success
     }
 
     @SuppressLint("MissingPermission")

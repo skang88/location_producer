@@ -196,14 +196,6 @@ class Esp32Gateway private constructor(private val appContext: Context) {
 
         try {
             val device = adapter.getRemoteDevice(targetAddress)
-            if (device.bondState == BluetoothDevice.BOND_NONE && hasBluetoothConnectPermission()) {
-                logMsg("OS 블루투스 페어링(Bonding) 요청: $targetAddress")
-                try {
-                    device.createBond()
-                } catch (e: Exception) {
-                    Log.w(TAG, "createBond error: ${e.message}")
-                }
-            }
             bluetoothGatt = device.connectGatt(
                 appContext,
                 false,

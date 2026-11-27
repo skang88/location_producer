@@ -122,6 +122,9 @@ void i2cWriteByte(uint8_t addr, uint8_t reg, uint8_t val) {
 bool initBMI160() {
   uint8_t candidates[2] = {0x68, 0x69};
   for (int i = 0; i < 2; i++) {
+    // BMI160 requires a dummy I2C read (reg 0x7F) after power-on to switch from SPI to I2C mode
+    i2cReadByte(candidates[i], 0x7F);
+    delay(5);
     uint8_t chipId = i2cReadByte(candidates[i], BMI160_REG_CHIP_ID);
     if (chipId == BMI160_CHIP_ID_VAL) {
       bmi160Addr = candidates[i];
@@ -324,6 +327,11 @@ void autoDetectI2CPins() {
     Wire.setClock(100000);
     delay(10);
 
+    // Trigger BMI160 I2C wake-up (dummy read on 0x7F) before checking CHIP_ID
+    i2cReadByte(0x68, 0x7F);
+    i2cReadByte(0x69, 0x7F);
+    delay(2);
+
     bool foundImu = (i2cReadByte(0x68, BMI160_REG_CHIP_ID) == BMI160_CHIP_ID_VAL) ||
                     (i2cReadByte(0x69, BMI160_REG_CHIP_ID) == BMI160_CHIP_ID_VAL);
     uint8_t bmpId76 = i2cReadByte(0x76, BMP388_REG_CHIP_ID);
@@ -335,6 +343,14 @@ void autoDetectI2CPins() {
       activeScl = scl;
       Serial.printf("[OK] Auto-detected I2C pins: SDA=%d, SCL=%d (BMI160=%d, BMP388=%d)\n",
                     sda, scl, foundImu, foundBmp);
+      Serial.print("[I2C SCAN] Devices found: ");
+      for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+          Serial.printf("0x%02X(id00=0x%02X,id0F=0x%02X) ", addr, i2cReadByte(addr, 0x00), i2cReadByte(addr, 0x0F));
+        }
+      }
+      Serial.println();
       return;
     }
   }

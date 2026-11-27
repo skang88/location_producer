@@ -392,10 +392,14 @@ fun MainScreen(
                                                     fontWeight = FontWeight.SemiBold,
                                                     style = MaterialTheme.typography.bodyMedium
                                                 )
+                                                val rssiStr = dev.rssi?.let { "$it dBm" } ?: "Signal: --"
+                                                val tagText = if (dev.isBonded) "$rssiStr · Paired" else rssiStr
                                                 Text(
-                                                    text = dev.address,
+                                                    text = "${dev.address}  ($tagText)",
                                                     fontFamily = FontFamily.Monospace,
-                                                    fontSize = 11.sp
+                                                    fontSize = 11.sp,
+                                                    fontWeight = if (dev.rssi != null && dev.rssi > -60) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (dev.rssi != null && dev.rssi > -60) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
 

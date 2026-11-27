@@ -1,0 +1,1542 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>대원 위치추적 및 안전 모니터링 관제 콘솔 (2D & 3D)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Three.js & OrbitControls (Local offline-ready & security compliant) -->
+  <script src="/static/js/three.min.js"></script>
+  <script src="/static/js/OrbitControls.js"></script>
+  <style>
+    body { background-color: #0d1117; color: #c9d1d9; }
+    #map, #threeContainer { height: 100%; width: 100%; border-radius: 0.5rem; }
+    .leaflet-container { background: #0f172a !important; }
+    .leaflet-tile { image-rendering: -webkit-optimize-contrast; }
+    .sensor-log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+    }
+
+    @keyframes pulsate {
+      0% { transform: scale(0.3); opacity: 0; }
+      50% { opacity: 0.9; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col font-sans select-none overflow-hidden">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="w-3.5 h-3.5 bg-red-500 rounded-full animate-pulse shadow-lg shadow-red-500/50"></div>
+      <h1 class="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+        <span>🚒 대원 실내외 위치추적 관제 센터</span>
+        <span class="text-xs font-medium px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800">ZUPT / PDR / 3D Z-Tracker</span>
+      </h1>
+    </div>
+    
+    <!-- Controls & Status -->
+    <div class="flex items-center space-x-3 text-xs">
+      <button onclick="clearSelectedRescuer()" id="btnAllView" class="flex items-center gap-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-300 px-3 py-1.5 rounded-lg border border-cyan-800 transition">
+        <span>🎯 전체 대원 한눈에 보기</span>
+      </button>
+      <button onclick="locateBrowser()" class="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 px-3 py-1.5 rounded-lg border border-gray-700 transition">
+        <span>📍 내 위치로 이동</span>
+      </button>
+      <button onclick="runSimulationDemo()" class="flex items-center gap-1.5 bg-blue-900/70 hover:bg-blue-800 text-blue-200 px-3 py-1.5 rounded-lg border border-blue-700 transition">
+        <span>▶ 대원 2명 계단이동(3D) 시뮬레이션</span>
+      </button>
+
+      <div class="h-4 w-px bg-gray-800 mx-1"></div>
+
+      <div id="wsStatus" class="flex items-center space-x-1.5 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-700">
+        <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+        <span class="text-gray-300">스트림 연결 중...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <div class="flex-1 flex overflow-hidden p-4 gap-4">
+    
+    <!-- Left: Rescuer Cards & Stats -->
+    <div class="w-84 flex flex-col gap-4 shrink-0">
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col flex-1 overflow-hidden shadow-lg">
+        <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-800">
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-semibold text-gray-200">대원 현황 (<span id="rescuerCount">0</span>명)</h2>
+            <span id="trackingModeBadge" onclick="unfocusRescuer()" class="text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800 cursor-pointer hover:border-cyan-500 transition" title="클릭하여 전체 보기 모드로 전환">전체 자동포괄</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="clearAllTrajectories()" class="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[10px] font-medium transition" title="모든 대원의 지도 궤적선을 초기화">
+              🧹 전체궤적삭제
+            </button>
+            <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+              <input type="checkbox" id="autoPanToggle" class="rounded bg-gray-800 text-blue-600 focus:ring-0">
+              <span>자동트래킹</span>
+            </label>
+          </div>
+        </div>
+        <div id="rescuerList" class="flex-1 overflow-y-auto space-y-3 pr-1">
+          <div class="text-xs text-gray-500 text-center py-10">
+            대원 데이터 로딩 중...
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center: 2D Map & 3D Building Trajectory Viewer -->
+    <div class="flex-1 flex flex-col bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-lg p-2">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+        <div class="flex items-center space-x-3">
+          <!-- View Toggle Tabs -->
+          <div class="flex bg-gray-950 p-1 rounded-lg border border-gray-800 text-xs">
+            <button id="tab2D" onclick="switchView('2D')" class="px-3.5 py-1.5 rounded-md font-semibold bg-gray-800 text-white transition flex items-center gap-1.5">
+              <span>🗺️ 2D 평면 지도</span>
+            </button>
+            <button id="tab3D" onclick="switchView('3D')" class="px-3.5 py-1.5 rounded-md font-semibold text-gray-400 hover:text-white transition flex items-center gap-1.5">
+              <span>🏢 3D 건물 & 계단 뷰</span>
+              <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+            </button>
+          </div>
+
+          <span id="indoorBanner" class="hidden text-xs bg-amber-950 text-amber-300 border border-amber-800 px-2.5 py-1 rounded font-medium">
+            ⚠️ 실내 진입 (PDR + 기압 고도 추정 가동)
+          </span>
+        </div>
+
+        <div class="text-xs text-gray-400 flex items-center space-x-3">
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> 실외</span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span> 실내 PDR</span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block"></span> 3D 층수/고도</span>
+        </div>
+      </div>
+
+      <!-- View Containers -->
+      <div class="flex-1 relative mt-2 overflow-hidden">
+        <!-- 2D Leaflet View -->
+        <div id="map"></div>
+
+        <!-- Interactive Calibration Floating Toolbar (No dropdown! Direct Buttons) -->
+        <div id="calibrationBanner" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-900/95 border-2 border-amber-400 text-white px-5 py-2.5 rounded-xl shadow-2xl flex items-center gap-4 text-xs font-semibold backdrop-blur">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
+            <span>🎯 <b id="calibRescuerName" class="text-amber-300 text-sm"></b>: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!</span>
+          </div>
+          <div class="flex items-center gap-1.5 border-l border-gray-700 pl-3">
+            <span class="text-gray-400">층수:</span>
+            <button onclick="stepToolbarFloor(-1)" class="w-6 h-6 bg-gray-800 hover:bg-gray-700 text-white rounded border border-gray-600 font-bold text-xs flex items-center justify-center">▼</button>
+            <span id="calibToolbarFloorBadge" data-floor="1" class="px-2 py-0.5 bg-amber-950 border border-amber-500 text-amber-300 font-bold rounded text-xs min-w-[32px] text-center">1F</span>
+            <button onclick="stepToolbarFloor(1)" class="w-6 h-6 bg-gray-800 hover:bg-gray-700 text-white rounded border border-gray-600 font-bold text-xs flex items-center justify-center">▲</button>
+            <div class="flex items-center gap-1 ml-1">
+              <button onclick="setToolbarFloor(-1)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">B1</button>
+              <button onclick="setToolbarFloor(1)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">1F</button>
+              <button onclick="setToolbarFloor(2)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">2F</button>
+              <button onclick="setToolbarFloor(3)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">3F</button>
+              <button onclick="setToolbarFloor(4)" class="px-1.5 py-0.5 bg-gray-950 hover:bg-gray-800 border border-gray-700 rounded text-[11px] font-semibold text-gray-300">4F</button>
+            </div>
+            <button onclick="finishCalibrationMode()" class="ml-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold transition shadow-md shadow-emerald-700/40">✓ 보정 적용</button>
+            <button onclick="cancelCalibrationMode()" class="bg-rose-900/90 hover:bg-rose-800 text-rose-200 border border-rose-600 px-2.5 py-1 rounded font-bold transition flex items-center gap-1">❌ 보정 취소 (ESC)</button>
+          </div>
+        </div>
+
+        <!-- 3D Three.js View -->
+        <div id="threeContainer" class="hidden relative w-full h-full bg-slate-950">
+          <div class="absolute top-3 left-3 z-10 bg-gray-900/90 border border-gray-700/80 rounded-lg p-3 text-xs text-gray-200 pointer-events-none space-y-1.5 shadow-xl">
+            <div class="font-bold text-white flex items-center gap-1.5 text-sm">
+              <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+              <span>🏢 실내 3차원 입체 건물 관제 (3D Stairs Tracker)</span>
+            </div>
+            <div class="text-gray-400">• 좌클릭 드래그: 360° 건물 자유 회전</div>
+            <div class="text-gray-400">• 마우스 휠: 줌인 / 줌아웃</div>
+            <div class="text-gray-400">• 우클릭 드래그: 시점 이동 (Pan)</div>
+            <div class="pt-1 text-[11px] text-cyan-300 font-semibold border-t border-gray-800">
+              층고 3.2m 기준 층별 슬래브(B1F~4F) 및 계단 3D 궤적 표시
+            </div>
+          </div>
+          <div class="absolute bottom-3 right-3 z-10 bg-gray-900/90 border border-gray-700/80 rounded-lg p-2 text-xs text-gray-300 flex items-center gap-2">
+            <button onclick="reset3DCamera()" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs text-white border border-gray-700 transition">
+              ↺ 카메라 초기화
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Android Raw Sensor Feed & Inspection -->
+    <div class="w-96 flex flex-col gap-4 shrink-0">
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col flex-1 overflow-hidden shadow-lg">
+        <div class="flex items-center justify-between mb-2 pb-2 border-b border-gray-800">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+            <h2 class="text-sm font-semibold text-gray-200">안드로이드 센서 실시간 피드</h2>
+          </div>
+          <span class="text-xs text-gray-400">MQTT 50Hz</span>
+        </div>
+        
+        <!-- Live IMU Summary Bar -->
+        <div id="imuSummary" class="bg-gray-950 border border-gray-800 rounded-lg p-3 text-xs mb-3 space-y-2">
+          <div class="flex justify-between text-gray-400">
+            <span>가속도 (Norm)</span>
+            <span id="accelNormVal" class="text-cyan-400 font-mono">0.00 m/s²</span>
+          </div>
+          <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
+            <div id="accelNormBar" class="bg-cyan-500 h-full w-0 transition-all duration-75"></div>
+          </div>
+          <div class="grid grid-cols-3 gap-1 pt-1 text-[11px] font-mono text-gray-400">
+            <div>방위: <span id="yawVal" class="text-white">0°</span></div>
+            <div>기압: <span id="baroVal" class="text-cyan-300">0 hPa</span></div>
+            <div>고도: <span id="relZVal" class="text-emerald-400 font-bold">+0.0m</span></div>
+          </div>
+        </div>
+
+        <!-- Raw JSON Packet Log -->
+        <div class="flex-1 overflow-hidden flex flex-col">
+          <div class="text-xs text-gray-400 mb-1 flex justify-between">
+            <span>수신 패킷 스트림 (Live Feed)</span>
+            <button onclick="clearLogs()" class="hover:text-white text-[11px]">지우기</button>
+          </div>
+          <div id="sensorLogContainer" class="flex-1 bg-gray-950 border border-gray-850 rounded-lg p-2.5 overflow-y-auto sensor-log text-gray-300 space-y-1.5">
+            <div class="text-gray-600">수신 대기 중...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. 2D Leaflet Map Initialization with Persistent Disk/Cache Caching
+    // ==========================================
+    let currentMapCenter = [35.3195, 128.2484];
+    const map = L.map('map', {
+      zoomControl: true,
+      preferCanvas: true,
+      fadeAnimation: true,
+      zoomAnimation: true
+    }).setView(currentMapCenter, 18);
+
+    // Persistent Local Cache Layer (Browser Cache Storage API)
+    // Ensures once tiles are downloaded, they are permanently cached locally and never show grey blanks
+    const PersistentCachedTileLayer = L.TileLayer.extend({
+      createTile: function (coords, done) {
+        const tile = document.createElement('img');
+        const url = this.getTileUrl(coords);
+        tile.setAttribute('role', 'presentation');
+        tile.crossOrigin = 'anonymous';
+
+        if ('caches' in window) {
+          caches.open('gnfire-map-tiles-v2').then(cache => {
+            cache.match(url).then(cachedResponse => {
+              if (cachedResponse) {
+                cachedResponse.blob().then(blob => {
+                  tile.src = URL.createObjectURL(blob);
+                  done(null, tile);
+                });
+              } else {
+                fetch(url, { mode: 'cors' }).then(res => {
+                  if (res.ok) {
+                    cache.put(url, res.clone());
+                    return res.blob();
+                  }
+                  throw new Error('Tile fetch status: ' + res.status);
+                }).then(blob => {
+                  tile.src = URL.createObjectURL(blob);
+                  done(null, tile);
+                }).catch(() => {
+                  // Fallback: direct image load without CORS cache
+                  tile.src = url;
+                  tile.onload = () => done(null, tile);
+                  tile.onerror = () => {
+                    // Secondary Fallback: CartoDB Voyager mirror if OSM blocked/rate-limited
+                    const s = ['a', 'b', 'c', 'd'][Math.abs(coords.x + coords.y) % 4];
+                    tile.src = `https://${s}.basemaps.cartocdn.com/rastertiles/voyager/${coords.z}/${coords.x}/${coords.y}.png`;
+                    tile.onload = () => done(null, tile);
+                    tile.onerror = (err) => done(err, tile);
+                  };
+                });
+              }
+            }).catch(() => {
+              tile.src = url;
+              tile.onload = () => done(null, tile);
+              tile.onerror = (err) => done(err, tile);
+            });
+          }).catch(() => {
+            tile.src = url;
+            tile.onload = () => done(null, tile);
+            tile.onerror = (err) => done(err, tile);
+          });
+        } else {
+          tile.src = url;
+          tile.onload = () => done(null, tile);
+          tile.onerror = (err) => done(err, tile);
+        }
+
+        return tile;
+      }
+    });
+
+    // Primary Tile Layer with maxNativeZoom: 19 (Stretches zoom 19 tiles up to zoom 21, preventing 404 grey blanks)
+    const baseMapLayer = new PersistentCachedTileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 21,
+      maxNativeZoom: 19,
+      keepBuffer: 12,
+      updateWhenIdle: false,
+      updateWhenZooming: false,
+      attribution: '© OpenStreetMap contributors | Cached'
+    }).addTo(map);
+
+    // Auto-fix map dimensions on resize to prevent grey canvas
+    window.addEventListener('resize', () => {
+      const mapDiv = document.getElementById('map');
+      if (mapDiv && !mapDiv.classList.contains('hidden')) {
+        map.invalidateSize({ animate: false });
+      }
+    });
+
+    // Rescuer Distinct High-Contrast Palettes (Auto-assigned by Rescuer ID/Name)
+    const RESCUER_PALETTES = [
+      { stroke: '#06b6d4', fill: '#0891b2', glow: '#22d3ee', text: '#22d3ee', threeHex: 0x06b6d4, name: '시안' },
+      { stroke: '#f59e0b', fill: '#d97706', glow: '#fbbf24', text: '#fbbf24', threeHex: 0xf59e0b, name: '호박' },
+      { stroke: '#10b981', fill: '#059669', glow: '#34d399', text: '#34d399', threeHex: 0x10b981, name: '에메랄드' },
+      { stroke: '#a855f7', fill: '#9333ea', glow: '#c084fc', text: '#c084fc', threeHex: 0xa855f7, name: '보라' },
+      { stroke: '#f43f5e', fill: '#e11d48', glow: '#fb7185', text: '#fb7185', threeHex: 0xf43f5e, name: '로즈' },
+      { stroke: '#0284c7', fill: '#0369a1', glow: '#38bdf8', text: '#38bdf8', threeHex: 0x0284c7, name: '스카이블루' },
+      { stroke: '#ea580c', fill: '#c2410c', glow: '#fb923c', text: '#fb923c', threeHex: 0xea580c, name: '오렌지' },
+      { stroke: '#84cc16', fill: '#65a30d', glow: '#a3e635', text: '#a3e635', threeHex: 0x84cc16, name: '라임' }
+    ];
+
+    function getRescuerPalette(id) {
+      if (!id) return RESCUER_PALETTES[0];
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) {
+        hash = (hash * 31 + id.charCodeAt(i)) & 0xffffffff;
+      }
+      const idx = Math.abs(hash) % RESCUER_PALETTES.length;
+      return RESCUER_PALETTES[idx];
+    }
+
+    const rescuers = {};
+    const polylines = {};
+    const markers = {};
+    const anchorMarkers = {};
+
+    // Clear Trajectories without deleting rescuers
+    function clearRescuerTrajectory(id) {
+      if (!id) return;
+      if (polylines[id]) {
+        polylines[id].setLatLngs([]);
+      }
+      if (rescuer3DObjects[id]) {
+        rescuer3DObjects[id].points = [];
+        if (rescuer3DObjects[id].line && rescuer3DObjects[id].line.geometry) {
+          rescuer3DObjects[id].line.geometry.setFromPoints([]);
+        }
+      }
+      showToast(`🧹 [${id}] 대원의 이동 궤적선이 초기화되었습니다.`);
+    }
+
+    function clearAllTrajectories() {
+      Object.keys(polylines).forEach(id => {
+        if (polylines[id]) polylines[id].setLatLngs([]);
+      });
+      Object.keys(rescuer3DObjects).forEach(id => {
+        if (rescuer3DObjects[id]) {
+          rescuer3DObjects[id].points = [];
+          if (rescuer3DObjects[id].line && rescuer3DObjects[id].line.geometry) {
+            rescuer3DObjects[id].line.geometry.setFromPoints([]);
+          }
+        }
+      });
+      showToast(`🧹 모든 대원의 이동 궤적선이 초기화되었습니다.`);
+    }
+
+    // Multi-Rescuer Tracking Management
+    let selectedRescuerId = null; // null = entire bounds mode, or specific device_id
+    let lastFitBoundsTime = 0;
+
+    function fetchInitialRescuers() {
+      fetch('/api/rescuers')
+        .then(res => res.json())
+        .then(data => {
+          const list = Object.values(data);
+          if (list.length > 0) {
+            list.forEach(handlePositionUpdate);
+            // Default: fit all rescuers
+            fitAllRescuers(true);
+          }
+        })
+        .catch(err => console.error("Error fetching initial state:", err));
+    }
+    fetchInitialRescuers();
+
+    function locateBrowser() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          map.setView([lat, lng], 18);
+          L.circleMarker([lat, lng], {
+            radius: 9,
+            color: '#3b82f6',
+            fillColor: '#60a5fa',
+            fillOpacity: 0.9
+          }).addTo(map).bindPopup("📍 현재 관제자(브라우저) 위치").openPopup();
+        });
+      }
+    }
+
+    function fitAllRescuers(immediate = false) {
+      const validLatLngs = Object.values(rescuers)
+        .filter(r => r.lat && r.lng)
+        .map(r => [r.lat, r.lng]);
+
+      if (validLatLngs.length === 1) {
+        if (immediate) map.setView(validLatLngs[0], 18);
+        else map.panTo(validLatLngs[0]);
+      } else if (validLatLngs.length > 1) {
+        const bounds = L.latLngBounds(validLatLngs);
+        // Avoid aggressive jittering by checking distance/time
+        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 18, animate: !immediate });
+      }
+    }
+
+    function clearSelectedRescuer() {
+      selectedRescuerId = null;
+      document.getElementById('trackingModeBadge').innerText = "전체 자동포괄";
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800";
+      switchView('2D');
+      fitAllRescuers(true);
+    }
+
+    // ==========================================
+    // 2. 3D Three.js Building & Stairs Viewer (Clear, Bright, Visible!)
+    // ==========================================
+    let scene, camera, renderer, controls;
+    let threeInitialized = false;
+    const rescuer3DObjects = {};
+
+    function createTextSprite(text, color = '#38bdf8', bg = 'rgba(15, 23, 42, 0.9)') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = bg;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(0, 0, 256, 64, 8);
+        ctx.fill();
+      } else {
+        ctx.fillRect(0, 0, 256, 64);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, 252, 60);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 128, 32);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.scale.set(6, 1.5, 1);
+      return sprite;
+    }
+
+    function updateTextSprite(sprite, text, color = '#38bdf8', bg = 'rgba(15, 23, 42, 0.9)') {
+      if (!sprite || !sprite.material) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = bg;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(0, 0, 256, 64, 8);
+        ctx.fill();
+      } else {
+        ctx.fillRect(0, 0, 256, 64);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, 252, 60);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 128, 32);
+
+      if (sprite.material.map) {
+        sprite.material.map.dispose();
+      }
+      sprite.material.map = new THREE.CanvasTexture(canvas);
+      sprite.material.needsUpdate = true;
+    }
+
+    function init3DScene() {
+      if (threeInitialized) return;
+      if (typeof THREE === 'undefined') {
+        console.error("Three.js is not loaded yet.");
+        return;
+      }
+
+      const container = document.getElementById('threeContainer');
+      const width = container.clientWidth || 800;
+      const height = container.clientHeight || 600;
+
+      scene = new THREE.Scene();
+      // Bright slate-dark background (Not pitch black!)
+      scene.background = new THREE.Color(0x0f172a);
+
+      camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+      camera.position.set(28, 26, 32);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      container.appendChild(renderer.domElement);
+
+      if (typeof THREE.OrbitControls !== 'undefined') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(0, 4, 0);
+      } else {
+        console.warn("THREE.OrbitControls not available");
+      }
+
+      // Bright Lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+      scene.add(ambientLight);
+
+      const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x1e293b, 1.0);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      dirLight.position.set(25, 45, 25);
+      scene.add(dirLight);
+
+      // Axis Helper
+      const axesHelper = new THREE.AxesHelper(6);
+      axesHelper.position.set(0, 0, 0);
+      scene.add(axesHelper);
+
+      // Building Floors (B1F to 4F) - Clear vivid slabs
+      const floorElevations = [-3.2, 0.0, 3.2, 6.4, 9.6];
+      const floorNames = ["B1F (-3.2m)", "1F 지상진입 (0m)", "2F (+3.2m)", "3F (+6.4m)", "4F (+9.6m)"];
+
+      floorElevations.forEach((elev, idx) => {
+        // Bright Grid
+        const gridHelper = new THREE.GridHelper(30, 15, idx === 1 ? 0x10b981 : 0x0ea5e9, 0x334155);
+        gridHelper.position.y = elev;
+        scene.add(gridHelper);
+
+        // Semi-transparent floor slab with border
+        const slabGeo = new THREE.PlaneGeometry(30, 30);
+        const slabMat = new THREE.MeshStandardMaterial({
+          color: idx === 1 ? 0x064e3b : 0x1e293b,
+          transparent: true,
+          opacity: idx === 1 ? 0.45 : 0.25,
+          side: THREE.DoubleSide
+        });
+        const slab = new THREE.Mesh(slabGeo, slabMat);
+        slab.rotation.x = Math.PI / 2;
+        slab.position.y = elev;
+        scene.add(slab);
+
+        // Wireframe edges around slab
+        const edges = new THREE.EdgesGeometry(slabGeo);
+        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 }));
+        line.rotation.x = Math.PI / 2;
+        line.position.y = elev;
+        scene.add(line);
+
+        // Floor Name floating 3D Tag
+        const tagColor = idx === 1 ? '#10b981' : '#38bdf8';
+        const tag = createTextSprite(floorNames[idx], tagColor);
+        tag.position.set(-17, elev + 0.5, 0);
+        scene.add(tag);
+      });
+
+      // Staircase Shaft Tower (Center)
+      const stairTowerGeo = new THREE.BoxGeometry(7, 16, 7);
+      const stairEdges = new THREE.EdgesGeometry(stairTowerGeo);
+      const stairTower = new THREE.LineSegments(stairEdges, new THREE.LineBasicMaterial({ color: 0xf59e0b, linewidth: 2 }));
+      stairTower.position.set(0, 4, 0);
+      scene.add(stairTower);
+
+      // Building 4 Outer Columns
+      const colGeo = new THREE.CylinderGeometry(0.2, 0.2, 16, 8);
+      const colMat = new THREE.MeshStandardMaterial({ color: 0x64748b });
+      [[-15, -15], [15, -15], [-15, 15], [15, 15]].forEach(([cx, cz]) => {
+        const col = new THREE.Mesh(colGeo, colMat);
+        col.position.set(cx, 4, cz);
+        scene.add(col);
+      });
+
+      function onResize() {
+        if (!container.clientWidth || !renderer) return;
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+      }
+      window.addEventListener('resize', onResize);
+
+      function animate() {
+        requestAnimationFrame(animate);
+        if (controls) controls.update();
+
+        const time = Date.now() * 0.003;
+        Object.values(rescuer3DObjects).forEach(obj => {
+          if (obj.marker) {
+            const scale = 1.0 + 0.12 * Math.sin(time);
+            obj.marker.scale.set(scale, scale, scale);
+          }
+        });
+
+        renderer.render(scene, camera);
+      }
+      animate();
+      threeInitialized = true;
+    }
+
+    function reset3DCamera() {
+      if (controls && camera) {
+        camera.position.set(28, 26, 32);
+        controls.target.set(0, 4, 0);
+        controls.update();
+      }
+    }
+
+    function switchView(view) {
+      const mapDiv = document.getElementById('map');
+      const threeDiv = document.getElementById('threeContainer');
+      const tab2D = document.getElementById('tab2D');
+      const tab3D = document.getElementById('tab3D');
+
+      if (view === '2D') {
+        mapDiv.classList.remove('hidden');
+        threeDiv.classList.add('hidden');
+        tab2D.className = "px-3.5 py-1.5 rounded-md font-semibold bg-gray-800 text-white transition flex items-center gap-1.5";
+        tab3D.className = "px-3.5 py-1.5 rounded-md font-semibold text-gray-400 hover:text-white transition flex items-center gap-1.5";
+        setTimeout(() => {
+          map.invalidateSize({ animate: false });
+        }, 60);
+      } else {
+        mapDiv.classList.add('hidden');
+        threeDiv.classList.remove('hidden');
+        tab3D.className = "px-3.5 py-1.5 rounded-md font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800 transition flex items-center gap-1.5";
+        tab2D.className = "px-3.5 py-1.5 rounded-md font-semibold text-gray-400 hover:text-white transition flex items-center gap-1.5";
+        
+        // Initialize 3D when container is visible
+        init3DScene();
+        
+        // Force resize update
+        setTimeout(() => {
+          if (renderer && threeDiv.clientWidth && threeDiv.clientHeight) {
+            camera.aspect = threeDiv.clientWidth / threeDiv.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(threeDiv.clientWidth, threeDiv.clientHeight);
+          }
+        }, 60);
+
+        // Immediately update all existing rescuers in 3D
+        if (threeInitialized) {
+          Object.values(rescuers).forEach(r => update3DRescuer(r));
+        }
+      }
+    }
+
+    function update3DRescuer(data) {
+      if (!threeInitialized) return;
+      const id = data.device_id;
+      const px = data.rel_x || 0.0;
+      const py = data.rel_z || 0.0;
+      const pz = -(data.rel_y || 0.0);
+      const pal = getRescuerPalette(id);
+      const baseColor = pal.threeHex;
+      const emitColor = pal.threeHex;
+
+      if (!rescuer3DObjects[id]) {
+        const group = new THREE.Group();
+        
+        // Bright glowing Sphere
+        const sphereGeo = new THREE.SphereGeometry(0.85, 16, 16);
+        const sphereMat = new THREE.MeshStandardMaterial({
+          color: baseColor,
+          emissive: emitColor,
+          roughness: 0.1
+        });
+        const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+        group.add(sphere);
+
+        // Label Tag
+        const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
+        const labelSprite = createTextSprite(`${id} [${floorStr}]`, pal.text);
+        labelSprite.position.set(0, 1.8, 0);
+        labelSprite.scale.set(5.5, 1.4, 1);
+        group.add(labelSprite);
+
+        // Direction Cone
+        const coneGeo = new THREE.ConeGeometry(0.45, 1.4, 8);
+        const coneMat = new THREE.MeshBasicMaterial({ color: pal.threeHex });
+        const cone = new THREE.Mesh(coneGeo, coneMat);
+        cone.rotation.x = Math.PI / 2;
+        cone.position.z = -1.2;
+        group.add(cone);
+
+        scene.add(group);
+
+        // 3D Path Line
+        const lineGeo = new THREE.BufferGeometry();
+        const lineMat = new THREE.LineBasicMaterial({
+          color: pal.threeHex,
+          linewidth: 4
+        });
+        const line = new THREE.Line(lineGeo, lineMat);
+        scene.add(line);
+
+        rescuer3DObjects[id] = {
+          marker: group,
+          cone: cone,
+          label: labelSprite,
+          line: line,
+          points: []
+        };
+      }
+
+      const obj = rescuer3DObjects[id];
+      obj.marker.position.set(px, py, pz);
+      
+      const headingRad = THREE.MathUtils.degToRad(data.heading_deg || 0);
+      obj.marker.rotation.y = -headingRad;
+
+      // Update 3D Floor Label dynamically when floor changes
+      const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
+      const labelText = `${id} [${floorStr}]`;
+      if (obj.currentText !== labelText) {
+        obj.currentText = labelText;
+        updateTextSprite(obj.label, labelText, pal.text);
+      }
+
+      obj.points.push(new THREE.Vector3(px, py, pz));
+      if (obj.points.length > 500) obj.points.shift();
+      obj.line.geometry.setFromPoints(obj.points);
+    }
+
+    // ==========================================
+    // 3. Real-time EventSource (SSE) Connection
+    // ==========================================
+    let eventSource;
+    function connectSSE() {
+      eventSource = new EventSource('/events');
+
+      eventSource.onopen = () => {
+        document.getElementById('wsStatus').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span class="text-emerald-400 font-medium">실시간 스트리밍 중</span>
+        `;
+      };
+
+      eventSource.onerror = () => {
+        document.getElementById('wsStatus').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+          <span class="text-amber-400">연결 대기 중...</span>
+        `;
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'INIT_STATE') {
+            Object.values(msg.data).forEach(handlePositionUpdate);
+          } else if (msg.type === 'POSITION_UPDATE') {
+            handlePositionUpdate(msg.data);
+          } else if (msg.type === 'RESCUER_DELETED') {
+            removeRescuerFromUI(msg.data.device_id);
+            if (msg.data.reason === 'user_stopped') {
+              showToast(`🛑 [${msg.data.device_id}] 대원이 스트리밍을 종료하여 목록에서 제거되었습니다.`);
+            }
+          } else if (msg.type === 'RESCUER_STATUS') {
+            const { device_id, status } = msg.data;
+            if (rescuers[device_id]) {
+              rescuers[device_id].connection_status = status;
+              renderRescuerList();
+              if (status === 'SIGNAL_LOST') {
+                showToast(`⚠️ [${device_id}] 신호가 끊겼습니다. 마지막 위치가 유지됩니다.`);
+              }
+            }
+          } else if (msg.type === 'RAW_SENSOR_FEED') {
+            handleRawSensorFeed(msg.data);
+          }
+        } catch (e) {
+          // ignore heartbeats
+        }
+      };
+    }
+    connectSSE();
+
+    // ==========================================
+    // 4. Handle Position Estimate Update
+    // ==========================================
+    function handlePositionUpdate(data) {
+      const id = data.device_id;
+      rescuers[id] = data;
+      renderRescuerList();
+
+      if (!data.lat || !data.lng) return;
+
+      const latLng = [data.lat, data.lng];
+      const isIndoor = data.mode === 'INDOOR_DEAD_RECKONING';
+      const heading = data.heading_deg || 0;
+      const floorStr = data.floor_str || (data.floor ? `${data.floor}F` : '1F');
+
+      const pal = getRescuerPalette(id);
+
+      // 1. 2D Polyline trajectory (Individual distinct high-contrast color per rescuer)
+      if (!polylines[id]) {
+        polylines[id] = L.polyline([], {
+          color: pal.stroke,
+          weight: 5,
+          opacity: 0.95
+        }).addTo(map);
+      }
+      polylines[id].addLatLng(latLng);
+
+      // 2. 2D Marker
+      const badgeBg = pal.fill;
+      const glowColor = pal.glow;
+      if (!markers[id]) {
+        const icon = L.divIcon({
+          className: '',
+          html: `
+            <div style="position: relative; width: 34px; height: 34px;" onclick="toggleFocusRescuer('${id}')">
+              <div style="position: absolute; left: -10px; top: -10px; width: 54px; height: 54px; border-radius: 50%; border: 3px solid ${glowColor}; opacity: 0.8; animation: pulsate 1.5s infinite;"></div>
+              <div style="width: 34px; height: 34px; background-color: ${badgeBg}; border: 2.5px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px ${glowColor}; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
+                🚨
+              </div>
+              <div id="arrow_${id}" style="position: absolute; top: -14px; left: 11px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 12px solid ${glowColor}; transform-origin: 6px 28px; transform: rotate(${heading}deg);"></div>
+              <div id="label_${id}" style="position: absolute; left: 38px; top: 4px; background: rgba(15,23,42,0.95); color: ${pal.text}; font-weight: bold; font-size: 11px; padding: 2px 7px; border-radius: 4px; border: 1.5px solid ${pal.stroke}; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); pointer-events: none;">
+                ${id} [${floorStr}]
+              </div>
+            </div>
+          `,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17]
+        });
+        markers[id] = L.marker(latLng, { icon: icon, zIndexOffset: 1000 }).addTo(map);
+        markers[id].bindPopup(`
+          <div style="font-size: 12px; color: #1e293b; min-width: 160px; line-height: 1.6;">
+            <div style="font-weight: bold; font-size: 14px; color: ${badgeBg}; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;">
+              🚨 대원 ID: ${id}
+            </div>
+            <div>현재 층수: <b style="color: #d97706;">${floorStr} (고도: ${data.rel_z || 0}m)</b></div>
+            <div>추적 모드: <b style="color: #059669;">${isIndoor ? '실내 PDR/ZUPT' : '실외 GPS'}</b></div>
+            <div>누적 걸음: <b>${data.steps || 0}보 (${data.distance || 0}m)</b></div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">좌표: ${data.lat.toFixed(6)}, ${data.lng.toFixed(6)}</div>
+          </div>
+        `);
+      } else {
+        markers[id].setLatLng(latLng);
+        const arrow = document.getElementById(`arrow_${id}`);
+        if (arrow) arrow.style.transform = `rotate(${heading}deg)`;
+        const label = document.getElementById(`label_${id}`);
+        if (label) label.innerText = `${id} [${floorStr}]`;
+      }
+
+      // 3. Indoor Anchor Marker
+      if (isIndoor && data.anchor_gps && !anchorMarkers[id]) {
+        document.getElementById('indoorBanner').classList.remove('hidden');
+        const anchorIcon = L.divIcon({
+          className: '',
+          html: `<div style="background-color: #f59e0b; color: #000; font-weight: bold; font-size: 11px; padding: 2px 6px; border-radius: 4px; border: 1.5px solid #000; box-shadow: 0 2px 6px rgba(0,0,0,0.5); white-space: nowrap;">🚪 ${id} 진입점</div>`,
+          iconSize: [80, 24],
+          iconAnchor: [40, 12]
+        });
+        anchorMarkers[id] = L.marker([data.anchor_gps.lat, data.anchor_gps.lng], { icon: anchorIcon }).addTo(map);
+      }
+
+      // 4. Stable Multi-Rescuer Auto-Tracking
+      const autoPan = document.getElementById('autoPanToggle').checked;
+      if (autoPan) {
+        if (selectedRescuerId) {
+          // If a specific rescuer is selected, follow only that rescuer
+          if (id === selectedRescuerId) {
+            map.panTo(latLng);
+          }
+        } else {
+          // If NO specific rescuer selected:
+          // Keep all active rescuers in bounds (Throttle to avoid jittering)
+          const now = Date.now();
+          if (now - lastFitBoundsTime > 2500) {
+            lastFitBoundsTime = now;
+            fitAllRescuers(false);
+          }
+        }
+      }
+
+      // 5. Update 3D scene (Safely isolated)
+      try {
+        if (threeInitialized) {
+          update3DRescuer(data);
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    // ==========================================
+    // 5. Focus Camera on Specific Rescuer (Click Action & Toggle)
+    // ==========================================
+    function toggleFocusRescuer(id) {
+      if (selectedRescuerId === id) {
+        unfocusRescuer();
+      } else {
+        focusRescuer(id);
+      }
+    }
+
+    function unfocusRescuer() {
+      selectedRescuerId = null;
+      document.getElementById('trackingModeBadge').innerText = "전체 자동포괄";
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800 cursor-pointer hover:border-cyan-500 transition";
+      renderRescuerList();
+      showToast("대원 단독 추적이 해제되었습니다. (자유 탐색 모드)");
+    }
+
+    function focusRescuer(id) {
+      selectedRescuerId = id;
+      renderRescuerList();
+      const r = rescuers[id];
+      if (!r) return;
+
+      document.getElementById('trackingModeBadge').innerText = `[${id}] 추적 고정 (해제클릭)`;
+      document.getElementById('trackingModeBadge').className = "text-[10px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded border border-amber-800 cursor-pointer hover:bg-amber-900 transition";
+
+      const mapDiv = document.getElementById('map');
+      const is2DVisible = !mapDiv.classList.contains('hidden');
+
+      if (is2DVisible) {
+        map.invalidateSize();
+        if (r.lat && r.lng) {
+          if (!markers[id]) handlePositionUpdate(r);
+          map.setView([r.lat, r.lng], 18);
+          if (markers[id]) markers[id].openPopup();
+        }
+      } else {
+        if (threeInitialized && rescuer3DObjects[id] && controls && camera) {
+          const px = r.rel_x || 0.0;
+          const py = r.rel_z || 0.0;
+          const pz = -(r.rel_y || 0.0);
+          controls.target.set(px, py, pz);
+          camera.position.set(px + 18, py + 12, pz + 22);
+          controls.update();
+        }
+      }
+    }
+
+    // ==========================================
+    // 6. Render Left Card List
+    // ==========================================
+    function renderRescuerList() {
+      const listContainer = document.getElementById('rescuerList');
+      const items = Object.values(rescuers);
+      document.getElementById('rescuerCount').innerText = items.length;
+
+      if (items.length === 0) {
+        listContainer.innerHTML = `<div class="text-xs text-gray-500 text-center py-10">현재 활동 중인 대원이 없습니다.</div>`;
+        return;
+      }
+
+      listContainer.innerHTML = items.map(r => {
+        const pal = getRescuerPalette(r.device_id);
+        const isIndoor = r.mode === 'INDOOR_DEAD_RECKONING';
+        const isSelected = r.device_id === selectedRescuerId;
+        const isCalibrating = activeCalibratingRescuerId === r.device_id;
+        const isSignalLost = r.connection_status === 'SIGNAL_LOST';
+        const currentFloor = r.floor || 1;
+        const floorStr = r.floor_str || `${currentFloor}F`;
+        const relZ = r.rel_z ? (r.rel_z > 0 ? `+${r.rel_z}m` : `${r.rel_z}m`) : '+0.0m';
+        const isClimbing = r.vertical_status === 'CLIMBING';
+        const isDescending = r.vertical_status === 'DESCENDING';
+        const isGridSnapped = r.is_grid_snapped;
+        const isTurning = r.turn_state === 'TURNING';
+        const isMagneticAnomaly = r.magnetic_anomaly;
+        const isManualCalibrated = !!r.is_manual_calibrated;
+
+        return `
+          <div onclick="toggleFocusRescuer('${r.device_id}')" class="bg-gray-800/90 hover:bg-gray-750 cursor-pointer transition border ${isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/50 bg-slate-800' : (isIndoor ? 'border-amber-600/70' : 'border-emerald-600/70')} rounded-lg p-3 shadow-md space-y-2.5">
+            <!-- Header: Color Dot, Device ID, Floor & Tracking Mode -->
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-white text-sm flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-full shadow-sm" style="background-color: ${pal.fill}; border: 1.5px solid #ffffff;"></span>
+                <span style="color: ${pal.text}">${r.device_id}</span>
+                ${isSignalLost ? '<span class="text-[9px] bg-rose-950 text-rose-300 border border-rose-700 font-bold px-1.5 py-0.5 rounded animate-pulse" title="비정상 연결 끊김 - 마지막 위치 유지중">⚠️ 신호 끊김</span>' : ''}
+                ${isSelected ? '<span onclick="event.stopPropagation(); unfocusRescuer()" class="text-[9px] bg-amber-500 text-black font-bold px-1.5 py-0.5 rounded cursor-pointer hover:bg-amber-400 shadow" title="클릭하여 추적 해제">추적중 ✕</span>' : ''}
+              </span>
+              <div class="flex items-center gap-1">
+                <span class="text-xs px-2 py-0.5 rounded font-bold ${isClimbing || isDescending ? 'bg-amber-500 text-black animate-pulse' : 'bg-cyan-950 text-cyan-300 border border-cyan-800'}">
+                  ${isClimbing ? '🪜 승강 중 ' : (isDescending ? '🪜 하강 중 ' : '🏢 ')}${floorStr}
+                </span>
+                <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold ${isIndoor ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'}">
+                  ${isIndoor ? '실내 PDR' : '실외 GPS'}
+                </span>
+              </div>
+            </div>
+            
+            ${isManualCalibrated ? `
+            <div class="flex items-center justify-between bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1 text-[11px] text-amber-200">
+              <span class="flex items-center gap-1 font-semibold">🔒 위치·층수 고정중</span>
+              <button onclick="event.stopPropagation(); resetCalibration('${r.device_id}')" class="px-2 py-0.5 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 rounded text-[10px] font-bold transition flex items-center gap-0.5 shadow">
+                <span>🔄 GPS 자동복귀</span>
+              </button>
+            </div>
+            ` : ''}
+
+            <!-- Quick 2D Floor Adjustment (No dropdown! Direct Buttons) -->
+            <div class="bg-gray-900/90 border border-gray-700/80 rounded p-2 text-xs space-y-1.5" onclick="event.stopPropagation()">
+              <div class="flex items-center justify-between">
+                <span class="text-gray-300 font-semibold flex items-center gap-1">🏢 층수 빠른 보정:</span>
+                <div class="flex items-center gap-1">
+                  <button onclick="stepChangeFloor('${r.device_id}', -1)" class="px-2 py-0.5 bg-gray-800 hover:bg-gray-750 active:bg-cyan-800 text-gray-200 border border-gray-600 rounded font-bold text-xs shadow flex items-center gap-0.5" title="1개 층 아래로 (하강)">
+                    <span>▼ 하강</span>
+                  </button>
+                  <span class="px-2 py-0.5 bg-cyan-950 border border-cyan-500 text-cyan-300 font-bold rounded text-xs min-w-[34px] text-center shadow">${floorStr}</span>
+                  <button onclick="stepChangeFloor('${r.device_id}', 1)" class="px-2 py-0.5 bg-gray-800 hover:bg-gray-750 active:bg-cyan-800 text-gray-200 border border-gray-600 rounded font-bold text-xs shadow flex items-center gap-0.5" title="1개 층 위로 (승강)">
+                    <span>▲ 승강</span>
+                  </button>
+                </div>
+              </div>
+              <div class="flex items-center gap-1">
+                ${[-1, 1, 2, 3, 4].map(f => {
+                  const isCur = currentFloor === f;
+                  const label = f < 0 ? `B${Math.abs(f)}F` : `${f}F`;
+                  return `
+                    <button onclick="quickChangeFloor('${r.device_id}', ${f})" class="flex-1 py-1 rounded text-[11px] font-bold transition border ${isCur ? 'bg-amber-500 text-black border-amber-400 shadow-md ring-1 ring-amber-300' : 'bg-gray-950 hover:bg-gray-800 text-gray-300 border-gray-700'}">
+                      ${label}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-xs text-gray-300 pt-0.5">
+              <div>
+                <span class="text-gray-400">보행:</span> <span class="font-bold text-white">${r.steps || 0} 걸음</span>
+              </div>
+              <div>
+                <span class="text-gray-400">이동거리:</span> <span class="font-bold text-white">${r.distance || 0} m</span>
+              </div>
+              <div>
+                <span class="text-gray-400">상대좌표:</span> <span class="font-mono text-cyan-300">(${r.rel_x}m, ${r.rel_y}m)</span>
+              </div>
+              <div>
+                <span class="text-gray-400">상대고도:</span> <span class="font-mono text-emerald-400 font-bold">${relZ}</span>
+              </div>
+            </div>
+
+            <!-- Algorithm Stabilization Tags -->
+            <div class="flex flex-wrap items-center gap-1 pt-0.5">
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-300">
+                ${isTurning ? '🔄 회전' : '⬆️ 직진'}
+              </span>
+              ${isGridSnapped ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 border border-blue-700 text-blue-300">📐 복도축 스냅</span>' : ''}
+              ${isMagneticAnomaly ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-950 border border-red-700 text-red-300 animate-pulse">🧲 자기왜곡 차단</span>' : ''}
+            </div>
+
+            <div class="pt-2 border-t border-gray-700/60 flex items-center justify-between">
+              <span class="text-[11px] text-gray-400 truncate">방위: ${r.heading_deg || 0}°</span>
+              ${isSelected ? `
+                <button onclick="event.stopPropagation(); unfocusRescuer()" class="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[11px] font-bold transition flex items-center gap-1 shadow" title="클릭하여 단독 추적 해제">
+                  <span>✓ 추적 중 (해제)</span>
+                </button>
+              ` : `
+                <button onclick="event.stopPropagation(); focusRescuer('${r.device_id}')" class="px-2.5 py-1 bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700 rounded text-[11px] font-medium transition">
+                  <span>📍 이 대원만 추적</span>
+                </button>
+              `}
+            </div>
+
+            <!-- Commander Actions: Manual Calibration Toggle, Clear Trajectory, Delete -->
+            <div class="grid grid-cols-3 gap-1 pt-1">
+              <button onclick="event.stopPropagation(); toggleCalibrationMode('${r.device_id}')" class="py-1 ${isCalibrating ? 'bg-amber-500 hover:bg-amber-400 text-black font-bold animate-pulse' : 'bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/80'} rounded text-[11px] font-medium transition flex items-center justify-center gap-0.5 shadow-sm" title="${isCalibrating ? '보정 모드 취소/종료' : '지도를 클릭하거나 마커를 드래그하여 즉시 위치 보정'}">
+                <span>${isCalibrating ? '❌ 보정취소' : '🎯 위치보정'}</span>
+              </button>
+              <button onclick="event.stopPropagation(); clearRescuerTrajectory('${r.device_id}')" class="py-1 bg-gray-900 hover:bg-gray-750 text-gray-300 border border-gray-700 rounded text-[11px] font-medium transition flex items-center justify-center gap-0.5 shadow-sm" title="대원을 삭제하지 않고 지도상의 이동 궤적선만 초기화">
+                <span>🧹 궤적삭제</span>
+              </button>
+              <button onclick="event.stopPropagation(); deleteRescuer('${r.device_id}')" class="py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded text-[11px] font-medium transition flex items-center justify-center gap-0.5 shadow-sm" title="관제 목록에서 대원 삭제">
+                <span>🗑️ 대원삭제</span>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==========================================
+    // 7. Handle Live Raw Sensor Log Stream
+    // ==========================================
+    function handleRawSensorFeed(data) {
+      if (data.imu && data.imu.accel) {
+        const { x, y, z } = data.imu.accel;
+        const norm = Math.sqrt(x*x + y*y + z*z);
+        document.getElementById('accelNormVal').innerText = norm.toFixed(2) + ' m/s²';
+        const percent = Math.min(100, Math.max(0, (norm / 20.0) * 100));
+        document.getElementById('accelNormBar').style.width = percent + '%';
+      }
+      if (data.imu && data.imu.yaw !== undefined) {
+        document.getElementById('yawVal').innerText = data.imu.yaw.toFixed(1) + '°';
+      }
+      if (data.barometer && data.barometer.pressure) {
+        document.getElementById('baroVal').innerText = data.barometer.pressure + ' hPa';
+      }
+
+      const r = rescuers[data.device_id];
+      if (r && r.rel_z !== undefined) {
+        document.getElementById('relZVal').innerText = (r.rel_z >= 0 ? `+${r.rel_z}m` : `${r.rel_z}m`) + ` (${r.floor_str || '1F'})`;
+      }
+
+      const container = document.getElementById('sensorLogContainer');
+      const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+      const gpsState = data.gps ? (data.gps.is_valid ? 'GPS_OK' : 'GPS_LOST') : 'NO_GPS';
+      
+      const logLine = document.createElement('div');
+      logLine.className = 'border-b border-gray-900 pb-1';
+      logLine.innerHTML = `
+        <span class="text-gray-500">[${timeStr}]</span> 
+        <span class="text-cyan-400 font-semibold">${data.device_id}</span> 
+        <span class="${data.gps && data.gps.is_valid ? 'text-emerald-400' : 'text-amber-400'}">[${gpsState}]</span>
+        <div class="text-gray-400 truncate">P: ${data.barometer?.pressure || 0}hPa | a: (${data.imu?.accel?.x}, ${data.imu?.accel?.y}, ${data.imu?.accel?.z})</div>
+      `;
+
+      container.prepend(logLine);
+      if (container.children.length > 30) {
+        container.removeChild(container.lastChild);
+      }
+    }
+
+    function clearLogs() {
+      document.getElementById('sensorLogContainer').innerHTML = '<div class="text-gray-600">로그가 초기화되었습니다.</div>';
+    }
+
+    // ==========================================
+    // 8. 2-Rescuers 3D Climbing Simulation Demo
+    // ==========================================
+    function runSimulationDemo() {
+      switchView('3D');
+
+      let step = 0;
+      let startLat = map.getCenter().lat;
+      let startLng = map.getCenter().lng;
+
+      const simInterval = setInterval(() => {
+        step++;
+
+        // Rescuer 1 (Alpha): climbs to 3F
+        let dz1 = 0, dx1 = 0, dy1 = 0, h1 = 90;
+        if (step <= 5) {
+          dx1 = step * 0.7;
+        } else if (step > 5 && step <= 20) {
+          const s = step - 5;
+          dz1 = (s / 15.0) * 6.4;
+          const a = (s / 15.0) * Math.PI * 4;
+          dx1 = 3.5 + 3.0 * Math.cos(a);
+          dy1 = 3.0 * Math.sin(a);
+          h1 = ((a * 180 / Math.PI) + 90) % 360;
+        } else {
+          dz1 = 6.4;
+          dy1 = (step - 20) * 0.7;
+          h1 = 0;
+        }
+
+        // Rescuer 2 (Bravo): climbs to 2F
+        let dz2 = 0, dx2 = 0, dy2 = 0, h2 = 270;
+        if (step <= 7) {
+          dx2 = -(step * 0.6);
+        } else if (step > 7 && step <= 18) {
+          const s = step - 7;
+          dz2 = (s / 11.0) * 3.2; // up to 2F
+          const a = (s / 11.0) * Math.PI * 3;
+          dx2 = -3.5 - 2.5 * Math.cos(a);
+          dy2 = -2.5 * Math.sin(a);
+          h2 = ((a * 180 / Math.PI) + 270) % 360;
+        } else {
+          dz2 = 3.2;
+          dx2 = -6.0 - (step - 18) * 0.6;
+          h2 = 180;
+        }
+
+        const f1 = Math.max(1, Math.min(3, 1 + Math.floor((dz1 + 1.6) / 3.2)));
+        const f2 = Math.max(1, Math.min(2, 1 + Math.floor((dz2 + 1.6) / 3.2)));
+
+        // Send updates for both rescuers
+        handlePositionUpdate({
+          device_id: "RESCUER_01",
+          mode: step > 3 ? "INDOOR_DEAD_RECKONING" : "GPS_OUTDOOR",
+          anchor_gps: { lat: startLat, lng: startLng },
+          rel_x: Number(dx1.toFixed(2)),
+          rel_y: Number(dy1.toFixed(2)),
+          rel_z: Number(dz1.toFixed(2)),
+          floor: f1,
+          floor_str: `${f1}F`,
+          vertical_status: (step > 5 && step <= 20) ? "CLIMBING" : "LEVEL",
+          lat: startLat + (dy1 / 111320.0),
+          lng: startLng + (dx1 / (111320.0 * Math.cos(startLat * Math.PI / 180))),
+          heading_deg: Math.round(h1),
+          steps: step,
+          distance: Number((step * 0.7).toFixed(2)),
+          turn_state: (step > 5 && step <= 20) ? "TURNING" : "STRAIGHT",
+          is_grid_snapped: (step <= 5 || step > 20)
+        });
+
+        handlePositionUpdate({
+          device_id: "RESCUER_02",
+          mode: step > 4 ? "INDOOR_DEAD_RECKONING" : "GPS_OUTDOOR",
+          anchor_gps: { lat: startLat, lng: startLng },
+          rel_x: Number(dx2.toFixed(2)),
+          rel_y: Number(dy2.toFixed(2)),
+          rel_z: Number(dz2.toFixed(2)),
+          floor: f2,
+          floor_str: `${f2}F`,
+          vertical_status: (step > 7 && step <= 18) ? "CLIMBING" : "LEVEL",
+          lat: startLat + (dy2 / 111320.0),
+          lng: startLng + (dx2 / (111320.0 * Math.cos(startLat * Math.PI / 180))),
+          heading_deg: Math.round(h2),
+          steps: step,
+          distance: Number((step * 0.6).toFixed(2)),
+          turn_state: (step > 7 && step <= 18) ? "TURNING" : "STRAIGHT",
+          is_grid_snapped: (step <= 7 || step > 18)
+        });
+
+        if (step >= 28) clearInterval(simInterval);
+      }, 400);
+    }
+
+    // ==========================================
+    // 9. Commander Actions: Delete & Manual Calibration
+    // ==========================================
+    let activeCalibratingRescuerId = null;
+
+    function showToast(message, isSuccess = true) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `px-4 py-2.5 rounded-lg shadow-2xl text-xs font-semibold pointer-events-auto transition-all transform duration-300 flex items-center gap-2 border ${isSuccess ? 'bg-emerald-950/95 border-emerald-500 text-emerald-200' : 'bg-rose-950/95 border-rose-500 text-rose-200'}`;
+      toast.innerHTML = `<span>${isSuccess ? '✅' : '⚠️'}</span><span>${message}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    function deleteRescuer(id) {
+      if (!confirm(`[${id}] 대원을 관제 모니터링 목록에서 삭제하시겠습니까?\n(새로운 센서 데이터가 도착하면 다시 자동 등록됩니다)`)) {
+        return;
+      }
+
+      fetch(`/api/rescuers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+        .then(res => res.json())
+        .then(data => {
+          removeRescuerFromUI(id);
+          showToast(`[${id}] 대원이 관제 목록에서 삭제되었습니다.`);
+        })
+        .catch(err => {
+          console.error(err);
+          removeRescuerFromUI(id);
+          showToast(`[${id}] 대원이 관제 목록에서 삭제되었습니다.`);
+        });
+    }
+
+    function removeRescuerFromUI(id) {
+      if (rescuers[id]) delete rescuers[id];
+      if (markers[id]) {
+        map.removeLayer(markers[id]);
+        delete markers[id];
+      }
+      if (polylines[id]) {
+        map.removeLayer(polylines[id]);
+        delete polylines[id];
+      }
+      if (anchorMarkers[id]) {
+        map.removeLayer(anchorMarkers[id]);
+        delete anchorMarkers[id];
+      }
+      if (rescuer3DObjects[id]) {
+        if (scene) {
+          scene.remove(rescuer3DObjects[id].marker);
+          scene.remove(rescuer3DObjects[id].line);
+        }
+        delete rescuer3DObjects[id];
+      }
+      if (selectedRescuerId === id) {
+        selectedRescuerId = null;
+        document.getElementById('trackingModeBadge').innerText = "전체 자동포괄";
+        document.getElementById('trackingModeBadge').className = "text-[10px] bg-cyan-950 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-800";
+      }
+      renderRescuerList();
+    }
+
+    // Interactive Direct Calibration Mode
+    function toggleCalibrationMode(id) {
+      if (activeCalibratingRescuerId === id) {
+        cancelCalibrationMode();
+      } else {
+        startCalibrationMode(id);
+      }
+    }
+
+    function startCalibrationMode(id) {
+      const r = rescuers[id];
+      if (!r) return;
+
+      activeCalibratingRescuerId = id;
+      switchView('2D');
+      renderRescuerList();
+
+      const f = r.floor || 1;
+      const fStr = r.floor_str || `${f}F`;
+      document.getElementById('calibRescuerName').innerText = id;
+      const badge = document.getElementById('calibToolbarFloorBadge');
+      if (badge) {
+        badge.innerText = fStr;
+        badge.dataset.floor = String(f);
+      }
+      document.getElementById('calibrationBanner').classList.remove('hidden');
+      map.getContainer().style.cursor = 'crosshair';
+
+      // Enable dragging on marker
+      if (markers[id]) {
+        markers[id].dragging.enable();
+        markers[id].off('dragend');
+        markers[id].on('dragend', function () {
+          const pos = markers[id].getLatLng();
+          const floor = getToolbarCurrentFloor();
+          applyCalibration(id, pos.lat, pos.lng, floor);
+        });
+      }
+
+      // Bind direct map click
+      map.off('click', onMapClickForCalibration);
+      map.on('click', onMapClickForCalibration);
+
+      showToast(`🎯 [${id}] 위치보정 활성화: 지도를 클릭하거나 마커를 원하는 곳으로 드래그하세요!`);
+    }
+
+    function getToolbarCurrentFloor() {
+      const badge = document.getElementById('calibToolbarFloorBadge');
+      return badge ? parseInt(badge.dataset.floor || '1', 10) : 1;
+    }
+
+    function setToolbarFloor(f) {
+      const id = activeCalibratingRescuerId;
+      const badge = document.getElementById('calibToolbarFloorBadge');
+      if (badge) {
+        badge.innerText = f > 0 ? `${f}F` : `B${Math.abs(f)}F`;
+        badge.dataset.floor = String(f);
+      }
+      if (id && rescuers[id]) {
+        changeCalibratingFloor(f);
+      }
+    }
+
+    function stepToolbarFloor(delta) {
+      let cur = getToolbarCurrentFloor();
+      let next = cur + delta;
+      if (next === 0) next = delta > 0 ? 1 : -1;
+      if (next < -2) next = -2;
+      if (next > 10) next = 10;
+      setToolbarFloor(next);
+    }
+
+    function onMapClickForCalibration(e) {
+      if (!activeCalibratingRescuerId) return;
+      const { lat, lng } = e.latlng;
+      const floor = getToolbarCurrentFloor();
+      applyCalibration(activeCalibratingRescuerId, lat, lng, floor);
+    }
+
+    function changeCalibratingFloor(floorVal) {
+      const id = activeCalibratingRescuerId;
+      if (!id || !rescuers[id]) return;
+      const r = rescuers[id];
+      applyCalibration(id, r.lat, r.lng, parseInt(floorVal, 10));
+    }
+
+    // 2D Instant Floor Adjustment (No 3D view switch needed!)
+    function quickChangeFloor(id, floorVal) {
+      const r = rescuers[id];
+      if (!r) return;
+      const floor = parseInt(floorVal, 10);
+      r.floor = floor;
+      r.floor_str = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
+      r.rel_z = (floor - 1) * 3.2;
+      r.vertical_status = "LEVEL";
+      r.mode = "INDOOR_DEAD_RECKONING";
+      r.is_manual_calibrated = true;
+      renderRescuerList();
+
+      if (markers[id]) {
+        const label = document.getElementById(`label_${id}`);
+        if (label) label.innerText = `${id} [${r.floor_str}]`;
+      }
+      update3DRescuer(r);
+
+      fetch('/api/rescuers/calibrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: id,
+          lat: r.lat,
+          lng: r.lng,
+          floor: floor
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        showToast(`🏢 [${id}] 대원 층수가 ${r.floor_str}로 즉시 보정되었습니다.`);
+      })
+      .catch(err => {
+        console.error(err);
+        showToast(`층수 보정 전송 실패: ${err.message}`, false);
+      });
+    }
+
+    function stepChangeFloor(id, delta) {
+      const r = rescuers[id];
+      if (!r) return;
+      let cur = r.floor || 1;
+      let next = cur + delta;
+      if (next === 0) next = delta > 0 ? 1 : -1;
+      if (next < -2) next = -2;
+      if (next > 10) next = 10;
+      quickChangeFloor(id, next);
+    }
+
+    function applyCalibration(id, lat, lng, floor) {
+      if (!id) return;
+
+      // 1. Instantly move marker on map
+      if (markers[id]) {
+        markers[id].setLatLng([lat, lng]);
+        const floorStr = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
+        const label = document.getElementById(`label_${id}`);
+        if (label) label.innerText = `${id} [${floorStr}]`;
+      }
+
+      // 2. Add to trajectory polyline
+      if (polylines[id]) {
+        polylines[id].addLatLng([lat, lng]);
+      }
+
+      // 3. Update local state
+      if (rescuers[id]) {
+        rescuers[id].lat = lat;
+        rescuers[id].lng = lng;
+        rescuers[id].floor = floor;
+        rescuers[id].floor_str = floor > 0 ? `${floor}F` : `B${Math.abs(floor)+1}F`;
+        rescuers[id].rel_z = (floor - 1) * 3.2;
+        rescuers[id].vertical_status = "LEVEL";
+        rescuers[id].mode = "INDOOR_DEAD_RECKONING";
+        rescuers[id].is_manual_calibrated = true;
+        renderRescuerList();
+        update3DRescuer(rescuers[id]);
+      }
+
+      // 4. Send calibration update to server & Kafka
+      fetch('/api/rescuers/calibrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: id,
+          lat: lat,
+          lng: lng,
+          floor: floor
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        showToast(`🎯 [${id}] 위치 (${lat.toFixed(5)}, ${lng.toFixed(5)} | ${floor}F) 보정 완료!`);
+      })
+      .catch(err => {
+        console.error(err);
+        showToast(`보정 서버 전송 실패: ${err.message}`, false);
+      });
+    }
+
+    function finishCalibrationMode() {
+      const id = activeCalibratingRescuerId;
+      if (id && markers[id]) {
+        markers[id].dragging.disable();
+        markers[id].off('dragend');
+      }
+      map.getContainer().style.cursor = '';
+      map.off('click', onMapClickForCalibration);
+      document.getElementById('calibrationBanner').classList.add('hidden');
+      if (id) showToast(`✅ [${id}] 위치 보정이 적용되었습니다.`);
+      activeCalibratingRescuerId = null;
+      renderRescuerList();
+    }
+
+    function cancelCalibrationMode() {
+      const id = activeCalibratingRescuerId;
+      if (id && markers[id]) {
+        markers[id].dragging.disable();
+        markers[id].off('dragend');
+      }
+      map.getContainer().style.cursor = '';
+      map.off('click', onMapClickForCalibration);
+      document.getElementById('calibrationBanner').classList.add('hidden');
+      if (id) showToast(`❌ [${id}] 위치 보정 모드가 종료되었습니다.`);
+      activeCalibratingRescuerId = null;
+      renderRescuerList();
+    }
+
+    function resetCalibration(id) {
+      if (!id) return;
+      if (!confirm(`[${id}] 대원의 수동 위치·층수 고정을 해제하고 실시간 GPS 자동 추적 모드로 복귀하시겠습니까?`)) {
+        return;
+      }
+      if (rescuers[id]) {
+        rescuers[id].is_manual_calibrated = false;
+        renderRescuerList();
+      }
+      fetch('/api/rescuers/reset_calibration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: id })
+      })
+      .then(res => res.json())
+      .then(data => {
+        showToast(`🔄 [${id}] GPS 자동 추적 모드로 복귀했습니다.`);
+      })
+      .catch(err => {
+        console.error(err);
+        showToast(`복귀 처리 중 오류: ${err.message}`, false);
+      });
+    }
+
+    // Global Keyboard ESC listener
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        cancelCalibrationMode();
+      }
+    });
+  </script>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+</body>
+</html>

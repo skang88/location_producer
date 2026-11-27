@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# C/C++ & OS artifacts
+.DS_Store
+Thumbs.db
+
+# Environment variables & secrets
+.env
+.env.*
+*.key
+*.pem
+*.cert
+*.crt
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Mosquitto and Kafka runtime volumes
+mosquitto/data/
+kafka/data/
+data/
+
+# IDE & Editor settings
+.idea/
+.vscode/
+*.swp
+*.bak
+
+# Build caches
+.pytest_cache/
+.coverage
+htmlcov/

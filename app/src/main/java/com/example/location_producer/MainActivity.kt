@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     private var hasLocationPermission by mutableStateOf(false)
+    private var hasBluetoothPermission by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -33,9 +34,20 @@ class MainActivity : ComponentActivity() {
         val fineLocation = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseLocation = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         hasLocationPermission = fineLocation || coarseLocation
+        checkPermissionsState()
 
         if (!hasLocationPermission) {
             Toast.makeText(this, "위치 권한이 필요합니다. 설정 화면으로 이동합니다.", Toast.LENGTH_SHORT).show()
+            openAppSettings()
+        }
+    }
+
+    private val bluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        checkPermissionsState()
+        if (!hasBluetoothPermission) {
+            Toast.makeText(this, "Mi Band 연동을 위해 블루투스 권한이 필요합니다.", Toast.LENGTH_SHORT).show()
             openAppSettings()
         }
     }
@@ -51,7 +63,9 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     viewModel = viewModel,
                     hasLocationPermission = hasLocationPermission,
-                    onRequestPermissions = { requestPermissionsOrOpenSettings() }
+                    hasBluetoothPermission = hasBluetoothPermission,
+                    onRequestPermissions = { requestPermissionsOrOpenSettings() },
+                    onRequestBluetoothPermissions = { requestBluetoothPermissions() }
                 )
             }
         }
@@ -72,6 +86,18 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
 
         hasLocationPermission = fineGranted || coarseGranted
+
+        hasBluetoothPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val scanGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
+            val connectGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+            scanGranted && connectGranted
+        } else {
+            hasLocationPermission
+        }
     }
 
     private fun requestPermissionsOrOpenSettings() {
@@ -94,6 +120,22 @@ class MainActivity : ComponentActivity() {
         }
 
         permissionLauncher.launch(permissionsToRequest.toTypedArray())
+    }
+
+    private fun requestBluetoothPermissions() {
+        checkPermissionsState()
+        if (hasBluetoothPermission) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            bluetoothPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                )
+            )
+        } else {
+            requestPermissionsOrOpenSettings()
+        }
     }
 
     private fun openAppSettings() {

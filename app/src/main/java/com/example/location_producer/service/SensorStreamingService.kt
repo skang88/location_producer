@@ -15,6 +15,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.location_producer.MainActivity
 import com.example.location_producer.R
+import com.example.location_producer.ble.BleConnectionStatus
+import com.example.location_producer.ble.MiBandGateway
+import com.example.location_producer.ble.MiBandGatewayState
 import com.example.location_producer.location.GpsCollector
 import com.example.location_producer.model.SensorPayload
 import com.example.location_producer.mqtt.MqttConnectionStatus
@@ -53,12 +56,18 @@ class SensorStreamingService : Service() {
 
         const val EXTRA_BROKER_URL = "EXTRA_BROKER_URL"
         const val EXTRA_DEVICE_ID = "EXTRA_DEVICE_ID"
+        const val EXTRA_MIBAND_ADDRESS = "EXTRA_MIBAND_ADDRESS"
+        const val EXTRA_MIBAND_NAME = "EXTRA_MIBAND_NAME"
+        const val EXTRA_MIBAND_AUTH_KEY = "EXTRA_MIBAND_AUTH_KEY"
 
         private val _serviceStatus = MutableStateFlow(ServiceStatus())
         val serviceStatus: StateFlow<ServiceStatus> = _serviceStatus.asStateFlow()
 
         private val _mqttState = MutableStateFlow(MqttState())
         val mqttState: StateFlow<MqttState> = _mqttState.asStateFlow()
+
+        private val _miBandState = MutableStateFlow(MiBandGatewayState())
+        val miBandState: StateFlow<MiBandGatewayState> = _miBandState.asStateFlow()
 
         fun addLog(msg: String) {
             val currentLogs = _serviceStatus.value.logs.takeLast(49).toMutableList()
@@ -74,9 +83,11 @@ class SensorStreamingService : Service() {
     private lateinit var sensorCollector: SensorCollector
     private lateinit var gpsCollector: GpsCollector
     private lateinit var mqttStreamManager: MqttStreamManager
+    private lateinit var miBandGateway: MiBandGateway
 
     private var streamingJob: Job? = null
     private var sentPacketCounter: Long = 0L
+    private var autoConnectedMiBand: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -86,6 +97,14 @@ class SensorStreamingService : Service() {
         sensorCollector = SensorCollector(this)
         gpsCollector = GpsCollector(this)
         mqttStreamManager = MqttStreamManager()
+        miBandGateway = MiBandGateway.getInstance(applicationContext)
+        miBandGateway.onLog = { addLog("[BLE] $it") }
+
+        serviceScope.launch {
+            miBandGateway.gatewayState.collect { state ->
+                _miBandState.value = state
+            }
+        }
 
         serviceScope.launch {
             mqttStreamManager.mqttState.collect { state ->
@@ -107,8 +126,17 @@ class SensorStreamingService : Service() {
             ACTION_START -> {
                 val brokerUrl = intent.getStringExtra(EXTRA_BROKER_URL) ?: "ws://mqtt.gnfire.opik.net:80/"
                 val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: ""
+                val miBandAddress = intent.getStringExtra(EXTRA_MIBAND_ADDRESS) ?: ""
+                val miBandName = intent.getStringExtra(EXTRA_MIBAND_NAME) ?: ""
+                val miBandAuthKey = intent.getStringExtra(EXTRA_MIBAND_AUTH_KEY) ?: ""
                 if (deviceId.isNotEmpty()) {
-                    startStreamingService(brokerUrl, deviceId)
+                    startStreamingService(
+                        brokerUrl = brokerUrl,
+                        deviceId = deviceId,
+                        miBandAddress = miBandAddress,
+                        miBandName = miBandName,
+                        miBandAuthKey = miBandAuthKey
+                    )
                 }
             }
             ACTION_STOP -> {
@@ -119,10 +147,24 @@ class SensorStreamingService : Service() {
         return START_STICKY
     }
 
-    private fun startStreamingService(brokerUrl: String, deviceId: String) {
+    private fun startStreamingService(
+        brokerUrl: String,
+        deviceId: String,
+        miBandAddress: String = "",
+        miBandName: String = "",
+        miBandAuthKey: String = ""
+    ) {
         val notification = buildNotification("Initializing streaming service...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                miBandGateway.hasBluetoothConnectPermission()
+            ) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+            startForeground(NOTIFICATION_ID, notification, fgsType)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -132,6 +174,20 @@ class SensorStreamingService : Service() {
         sensorCollector.start()
         gpsCollector.startLocationUpdates(1000L)
         mqttStreamManager.connect(brokerUrl, deviceId)
+
+        if (miBandAddress.isNotBlank() && miBandGateway.hasBluetoothConnectPermission()) {
+            val currentBle = miBandGateway.gatewayState.value
+            val alreadyActiveForTarget = currentBle.deviceAddress == miBandAddress &&
+                (currentBle.status == BleConnectionStatus.CONNECTING ||
+                    currentBle.status == BleConnectionStatus.AUTHENTICATING ||
+                    currentBle.status == BleConnectionStatus.CONNECTED_STREAMING)
+            if (!alreadyActiveForTarget) {
+                miBandGateway.connect(miBandAddress, miBandName, miBandAuthKey)
+            }
+            autoConnectedMiBand = true
+        } else {
+            autoConnectedMiBand = false
+        }
 
         sentPacketCounter = 0L
         _serviceStatus.value = ServiceStatus(
@@ -163,13 +219,15 @@ class SensorStreamingService : Service() {
                 val imu = sensorCollector.getLatestImu()
                 val barometer = sensorCollector.getLatestBarometer()
                 val gps = gpsCollector.getLatestGps()
+                val heartRate = miBandGateway.getLatestHeartRate()
 
                 val payload = SensorPayload(
                     deviceId = deviceId,
                     timestamp = System.currentTimeMillis(),
                     gps = gps,
                     imu = imu,
-                    barometer = barometer
+                    barometer = barometer,
+                    heartRate = heartRate
                 )
 
                 val jsonPayload = payload.toJsonString()
@@ -211,6 +269,10 @@ class SensorStreamingService : Service() {
         sensorCollector.stop()
         gpsCollector.stopLocationUpdates()
         mqttStreamManager.disconnect()
+        if (autoConnectedMiBand || miBandGateway.gatewayState.value.status != BleConnectionStatus.DISCONNECTED) {
+            miBandGateway.disconnect()
+        }
+        autoConnectedMiBand = false
 
         releaseWakeLock()
 
